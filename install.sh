@@ -51,9 +51,13 @@ if [ "$SKIP_GRAPH" = false ]; then
     PAYLOADS=$(find "${BRAIN_DIR}/projects" -name "*.json" | sort)
     COUNT=$(echo "$PAYLOADS" | grep -c . 2>/dev/null || echo 0)
     if [ "$COUNT" -gt 0 ]; then
-        echo "Ingesting $COUNT knowledge payload(s)..."
+        echo "Ingesting $COUNT knowledge payload(s) (pass 1/2)..."
         echo "$PAYLOADS" | while read -r f; do
             echo "  → $(basename "$f")"
+            "$PYTHON_BIN" "${BRAIN_DIR}/brain.py" ingest "$f" 2>/dev/null
+        done
+        echo "Re-ingesting to resolve cross-payload relations (pass 2/2)..."
+        echo "$PAYLOADS" | while read -r f; do
             "$PYTHON_BIN" "${BRAIN_DIR}/brain.py" ingest "$f" 2>/dev/null
         done
         echo "Graph restored:"
