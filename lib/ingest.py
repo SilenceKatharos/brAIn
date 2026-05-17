@@ -201,7 +201,7 @@ def _upsert_nodes(
             sole_owner = not current["srcs"]
             new_description = n.description if sole_owner else (current["descr"] or n.description)
             new_importance = n.importance if sole_owner else max(float(current["imp"]), float(n.importance))
-            new_sources = list({*current["srcs"], doc_id})
+            new_sources = list(dict.fromkeys([*current["srcs"], doc_id, *n.sources]))
             conn.execute(
                 """
                 MATCH (x:Node {id: $id})
@@ -238,7 +238,7 @@ def _upsert_nodes(
                     "description": n.description,
                     "importance": n.importance,
                     "now": now,
-                    "sources": [doc_id],
+                    "sources": list(dict.fromkeys([doc_id, *n.sources])),
                 },
             )
             report.nodes_created += 1
@@ -302,7 +302,7 @@ def _upsert_rels(
         if existing:
             current = existing[0]
             new_conf = max(float(current["c"]), float(r.confidence))
-            new_sources = list(current["srcs"]) + [doc_id]
+            new_sources = list(dict.fromkeys(list(current["srcs"]) + [doc_id] + list(r.sources)))
             new_evidences = list(current["evs"]) + [r.evidence]
             new_factors = list(current["fcts"]) + [r.factor]
             conn.execute(
@@ -340,7 +340,7 @@ def _upsert_rels(
                     "c": r.confidence,
                     "evs": [r.evidence],
                     "fcts": [r.factor],
-                    "srcs": [doc_id],
+                    "srcs": list(dict.fromkeys([doc_id, *r.sources])),
                     "now": now,
                 },
             )

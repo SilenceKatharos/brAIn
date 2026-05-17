@@ -97,9 +97,19 @@ export default function App() {
     if (searchResults !== null) {
       base = new Set(searchResults.map(n => n['n.id']))
     } else {
+      // Default: show the highest-importance node for each project (identified by
+      // a "project:*" source tag). allNodes is sorted by importance DESC so the
+      // first node encountered per project tag is automatically the top one.
       base = new Set()
-      // Default: show only the single highest-importance node; user expands from there
-      if (allNodes.length > 0) base.add(allNodes[0]['n.id'])
+      const seenProjects = new Set()
+      allNodes.forEach(n => {
+        const tag = (n['n.sources'] || []).find(s => typeof s === 'string' && s.startsWith('project:'))
+        if (tag && !seenProjects.has(tag)) {
+          seenProjects.add(tag)
+          base.add(n['n.id'])
+        }
+      })
+      if (base.size === 0 && allNodes.length > 0) base.add(allNodes[0]['n.id'])
     }
 
     // Add 1-hop neighbors for every explicitly expanded node

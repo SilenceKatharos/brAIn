@@ -51,6 +51,7 @@ class NodePayload:
     type: str
     description: str = ""
     importance: float = 0.5
+    sources: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -63,6 +64,7 @@ class RelPayload:
     confidence: float = 0.8
     evidence: str = ""
     factor: str = ""
+    sources: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -128,12 +130,15 @@ def _validate_node(raw: dict, res: ValidationResult) -> NodePayload | None:
     except (TypeError, ValueError):
         importance = 0.5
     importance = max(0.0, min(1.0, importance))
+    raw_sources = raw.get("sources") or []
+    extra_sources = [s for s in raw_sources if isinstance(s, str)]
     return NodePayload(
         id=canonical,
         label=label.strip(),
         type=ntype,
         description=(raw.get("description") or "").strip(),
         importance=importance,
+        sources=extra_sources,
     )
 
 
@@ -159,6 +164,8 @@ def _validate_rel(raw: dict, res: ValidationResult) -> RelPayload | None:
     except (TypeError, ValueError):
         confidence = 0.8
     confidence = max(0.0, min(1.0, confidence))
+    raw_sources = raw.get("sources") or []
+    extra_sources = [s for s in raw_sources if isinstance(s, str)]
     return RelPayload(
         src=src,
         dst=dst,
@@ -166,4 +173,5 @@ def _validate_rel(raw: dict, res: ValidationResult) -> RelPayload | None:
         confidence=confidence,
         evidence=(raw.get("evidence") or "").strip(),
         factor=(raw.get("factor") or "").strip(),
+        sources=extra_sources,
     )
