@@ -50,7 +50,7 @@ brain effects bus_factor_of_one
 brain paths bus_factor_of_one project_death
 ```
 
-> **Rebuilding the graph only** (if `graph/` was deleted): `./install.sh --no-ui` re-ingests all payloads from `projects/` without reinstalling dependencies.
+> **Rebuilding the graph** (if `graph/` was deleted): re-run `./install.sh` — it is fully idempotent. Use `--no-ui` to skip the npm step.
 
 ## Using with Claude Code
 
@@ -58,24 +58,7 @@ brain paths bus_factor_of_one project_death
 
 Registers 8 graph tools in **every** Claude Code session, regardless of working directory.
 
-```bash
-realpath .   # run from inside the brAIn directory
-```
-
-Add to `~/.claude/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "brain": {
-      "command": "/absolute/path/to/brAIn/.venv/bin/python",
-      "args": ["/absolute/path/to/brAIn/mcp_server.py"]
-    }
-  }
-}
-```
-
-Available tools: `brain_find`, `brain_show`, `brain_causes`, `brain_effects`, `brain_paths`, `brain_query`, `brain_stats`, `brain_ingest`.
+`./install.sh` prints the exact JSON snippet to add to `~/.claude/settings.json` with the correct absolute paths for your machine. Available tools: `brain_find`, `brain_show`, `brain_causes`, `brain_effects`, `brain_paths`, `brain_query`, `brain_stats`, `brain_ingest`.
 
 **On-demand retrieval**: Claude never loads the whole graph into context. It fetches only the 1-hop neighborhood of the concept it is currently processing.
 
@@ -106,19 +89,16 @@ The Stop hook queries `MATCH (n:Node) WHERE n.updated_at >= $session_start` — 
 ## React UI
 
 ```bash
-# Backend (from the brAIn root)
-.venv/bin/pip install fastapi "uvicorn[standard]"
+# Backend (from the brAIn root — deps already installed by install.sh)
 uvicorn ui.backend.main:app --port 8000
 
 # Frontend (separate terminal)
-cd ui/frontend
-npm install
-npm run dev     # → http://localhost:5173
+cd ui/frontend && npm run dev     # → http://localhost:5173
 ```
 
 The UI is a three-column layout: search/filter/node-list sidebar (left), force-directed graph canvas (center, d3-force layout), node detail panel (right).
 
-**Default view**: the canvas opens with only the highest-importance node visible. Double-clicking any node reveals its 1-hop neighbors. Search and type-filters override this and show their full result set.
+**Default view**: the canvas opens with the main node of each project registered in the graph (detected via a `project:*` source tag). Double-clicking any node reveals its 1-hop neighbors. Search and type-filters override this and show their full result set.
 
 **Ingest panel**: enter a project name and folder path; the backend spawns a dedicated Claude session that autonomously reads, extracts, and ingests the project. Coverage includes all file types: `*.md`, `*.py`, `*.jsx`, `*.tsx`, `*.js`, `*.sh`. For code files, the protocol extracts architectural decisions — why a module exists, what it prevents or enables, rejected alternatives — not line-by-line logic. The ingestion job streams output in real time; the frontend polls every 2 seconds.
 
