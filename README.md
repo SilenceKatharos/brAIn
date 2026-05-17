@@ -1,63 +1,54 @@
 # brAIn
 
-**A causal knowledge graph you build by reading, not by indexing.**
+**A causal knowledge graph built for [Claude](https://claude.ai/code) — store structure, not text.**
 
-Most AI memory systems are libraries of text: the model reads files, chunks them, and retrieves paragraphs. brAIn does the opposite — it stores the *causal structure* that documents describe, not the documents themselves.
+brAIn is a persistent external memory for Claude. Instead of re-reading documents every session, Claude extracts their causal structure once and stores it as a graph of atomic claims linked by typed edges (`causes`, `prevents`, `requires`, `enables`). Future sessions query the graph directly — no re-reading, no re-summarizing, no lost context.
 
-When you extract a document into brAIn, the source becomes disposable. What remains is a graph of atomic claims, linked by edges like `causes`, `prevents`, `requires`, `enables`. You can then ask *why*, *what if*, and *how does A lead to B* — and get precise, traceable answers from the graph.
+It is designed to be used with [Claude Code](https://claude.ai/code) as a skill or MCP server. Claude performs all semantic extraction; `brain.py` handles persistence, deduplication, and queries.
 
 ![brAIn graph explorer](docs/screenshot_graph.png)
 
----
+## How it works
 
-## What makes it different
+You point Claude at a document. Claude reads it, extracts nodes and causal relations, and emits a structured JSON payload. `brain.py` ingests it into a local [Kuzu](https://kuzudb.com) graph database. In any future session, Claude can query the graph to answer *why*, *what if*, and *how does A lead to B* — without ever touching the original document again.
 
 | Approach | What's stored | What's retrieved |
 |---|---|---|
 | RAG / vector DB | Chunks of source text | Paragraphs that match the query |
 | brAIn | Causal structure extracted from text | Nodes + evidence chains |
 
-**brAIn does no extraction itself.** There are no LLM calls, no NLP parsers, nothing inside `lib/`. The extraction is performed by Claude at conversation time (as a Claude Code skill or via the UI), which emits a structured JSON payload that `brain.py` validates, deduplicates, and persists.
+**brAIn contains zero LLM calls.** There are no AI libraries, no NLP parsers, nothing inside `lib/`. The intelligence lives entirely in Claude. `brain.py` is pure plumbing — validation, deduplication, Cypher queries, persistence.
 
-The graph is the asset. The code is just plumbing.
-
----
+The graph is the asset. The code is replaceable.
 
 ## Features
 
+- **Claude Code integration** — skill manifest (`docs/SKILL.md`) and MCP server (`mcp_server.py`) with 8 graph tools available in every session
 - **CLI** (`brain.py`) — init, ingest, find, show, causes, effects, paths, query, stats, audit, export, import, merge
-- **React UI** — interactive graph explorer, search + type filters, node detail panel, one-click project ingestion
-- **MCP server** — exposes graph tools (`brain_find`, `brain_show`, `brain_causes`, `brain_effects`, `brain_paths`, `brain_query`, `brain_ingest`, `brain_stats`) directly to Claude Code in any session
+- **React UI** — interactive graph explorer, search + type filters, node detail panel, one-click project ingestion via a dedicated Claude session
 - **Kuzu embedded graph DB** — Cypher queries, no server, no cloud, local storage in `graph/kuzu_db/`
 - **Idempotent re-ingestion** — re-running `ingest` on an existing `doc_id` replaces its contributions cleanly without touching other documents' edges
-- **Typed vocabulary** — strict relation whitelist (`causes`, `prevents`, `requires`, `enables`, `precedes`, `contradicts`, + structural types), open node types
-
----
+- **Typed vocabulary** — strict relation whitelist, open node types
 
 ## Quick start
 
 **Requirements:** Python ≥ 3.10, Node 18+ (UI only).
 
 ```bash
-git clone https://github.com/your-username/brAIn
+git clone git@github.com:SilenceKatharos/brAIn.git
 cd brAIn
 python3 -m venv .venv
-.venv/bin/pip install kuzu click          # core deps only
+.venv/bin/pip install kuzu click
 
-# Initialize the graph
 .venv/bin/python brain.py init
-
-# Ingest the bundled sample (open-source project mortality — 18 nodes, 26 rels)
 .venv/bin/python brain.py ingest examples/sample.json
 
-# Explore
 .venv/bin/python brain.py stats
 .venv/bin/python brain.py effects bus_factor_of_one
 .venv/bin/python brain.py paths bus_factor_of_one project_death
-.venv/bin/python brain.py audit
 ```
 
-**Optional: global `brain` command.** Instead of `.venv/bin/python brain.py` every time, create a wrapper:
+**Optional: global `brain` command.** Instead of `.venv/bin/python brain.py` every time:
 
 ```bash
 cat > ~/.local/bin/brain << 'EOF'
@@ -66,13 +57,62 @@ exec /absolute/path/to/brAIn/.venv/bin/python /absolute/path/to/brAIn/brain.py "
 EOF
 chmod +x ~/.local/bin/brain
 
-# Then use anywhere:
 brain stats
 brain find redis
 brain effects cache_miss_storm
 ```
 
----
+## Using with Claude Code
+
+### As an MCP server (recommended)
+
+Registers 8 graph tools in **every** Claude Code session, regardless of working directory.
+
+```bash
+realpath .   # run from inside the brAIn directory to get the absolute path
+```
+
+Add to `~/.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "brain": {
+      "command": "/absolute/path/to/brAIn/.venv/bin/python",
+      "args": ["/absolute/path/to/brAIn/mcp_server.py"]
+    }
+  }
+}
+```
+
+Available tools: `brain_find`, `brain_show`, `brain_causes`, `brain_effects`, `brain_paths`, `brain_query`, `brain_stats`, `brain_ingest`.
+
+### As a skill
+
+Add to `.claude/CLAUDE.md` in any project:
+
+```
+@/absolute/path/to/brAIn/docs/SKILL.md
+```
+
+Claude will follow the full extraction protocol: section inventory → entity pass → relation pass → completeness review → gap verification.
+
+## React UI
+
+```bash
+# Backend (from the brAIn root)
+.venv/bin/pip install fastapi "uvicorn[standard]"
+.venv/bin/python ui/backend/main.py      # → http://localhost:8000
+
+# Frontend (separate terminal)
+cd ui/frontend
+npm install
+npm run dev                              # → http://localhost:5173
+```
+
+The UI includes an **Ingest panel** — enter a project name and folder path, and the backend spawns a dedicated Claude session that autonomously reads, extracts, and ingests the project's markdown files.
+
+![brAIn ingest panel](docs/screenshot_ingest.png)
 
 ## CLI reference
 
@@ -92,8 +132,6 @@ brain.py import <file>           Load a dump (--strategy force | merge)
 brain.py merge SRC INTO DST      Merge node SRC into DST; SRC is deleted
 brain.py context <topic>         Get node + neighborhood for a topic (used by MCP)
 ```
-
----
 
 ## Ingestion format
 
@@ -127,7 +165,7 @@ brain.py context <topic>         Get node + neighborhood for a topic (used by MC
 }
 ```
 
-**ID rules:** node `id` is always canonicalized to `slugify(label)` — lowercase, non-alphanumeric → `_`. Avoid parentheses, slashes, and dots in labels to prevent silent ID rewrites that break relation lookups.
+**ID rules:** `id` is canonicalized to `slugify(label)` — lowercase, non-alphanumeric → `_`. Avoid parentheses, slashes, and dots in labels to prevent silent ID rewrites that break relation lookups.
 
 **Confidence calibration:**
 
@@ -137,71 +175,6 @@ brain.py context <topic>         Get node + neighborhood for a topic (used by MC
 | `0.7–0.9` | Reasonable inference from the text |
 | `0.4–0.6` | Plausible hypothesis, not demonstrated |
 | `< 0.4` | Don't ingest — omit rather than pollute |
-
----
-
-## Using with Claude Code
-
-### As a skill
-
-Create `.claude/CLAUDE.md` at the root of any project and add:
-
-```
-@/absolute/path/to/brAIn/docs/SKILL.md
-```
-
-Claude will then know how to extract documents (section inventory → entity pass → relation pass → gap verification), query the graph causally, and check for existing nodes before creating new ones.
-
-### As an MCP server (recommended)
-
-The MCP server makes graph tools available in **every** Claude Code session, regardless of working directory — no per-project setup needed.
-
-```bash
-# Find your brAIn path
-realpath .   # run from inside the brAIn directory
-```
-
-Then add to `~/.claude/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "brain": {
-      "command": "/absolute/path/to/brAIn/.venv/bin/python",
-      "args": ["/absolute/path/to/brAIn/mcp_server.py"]
-    }
-  }
-}
-```
-
-Available tools: `brain_find`, `brain_show`, `brain_causes`, `brain_effects`, `brain_paths`, `brain_query`, `brain_stats`, `brain_ingest`.
-
----
-
-## React UI
-
-The UI lives in `ui/`. Start the backend first, then the frontend.
-
-```bash
-# Backend (from the brAIn root)
-.venv/bin/pip install fastapi "uvicorn[standard]"
-.venv/bin/python ui/backend/main.py      # → http://localhost:8000
-
-# Frontend (in a separate terminal)
-cd ui/frontend
-npm install
-npm run dev                              # → http://localhost:5173
-```
-
-**UI features:**
-- Graph canvas with force-directed layout, importance-scaled nodes, color-coded by type
-- Sidebar with live search + type filter badges
-- Node detail panel showing description, relations, evidence, and sources
-- **Ingest panel** — enter a project name and folder path; the backend spawns a dedicated Claude session that reads the project's markdown files and ingests them automatically
-
-![brAIn ingest panel](docs/screenshot_ingest.png)
-
----
 
 ## Vocabulary
 
@@ -226,9 +199,7 @@ Any type outside this list is rejected at ingestion and logged to `extension_req
 
 ### Node types (open vocabulary)
 
-Node types are a reference vocabulary, not a hard constraint. Any non-empty string is accepted. Unknown types are logged to `extension_requests.jsonl` for review. Common types: `concept`, `entity`, `event`, `claim`, `mechanism`, `algorithm`, `property`, `person`, `artifact`, `process`.
-
----
+Any non-empty string is accepted. Unknown types are logged to `extension_requests.jsonl` for review. Common types: `concept`, `entity`, `event`, `claim`, `mechanism`, `algorithm`, `property`, `person`, `artifact`, `process`.
 
 ## Design principles
 
@@ -239,8 +210,6 @@ Node types are a reference vocabulary, not a hard constraint. Any non-empty stri
 5. **Traceability by default.** Every node and edge carries `sources` (origin doc_ids) and `evidence` (the reasoning). You can always trace why something is in the graph.
 6. **On-demand retrieval, not preemptive injection.** Claude never loads the whole graph into context — it fetches only what it needs, when it needs it, via tool calls.
 
----
-
 ## Testing
 
 ```bash
@@ -248,8 +217,6 @@ Node types are a reference vocabulary, not a hard constraint. Any non-empty stri
 .venv/bin/python -m coverage run --source=lib,brain -m pytest tests/ -q
 .venv/bin/python -m coverage report
 ```
-
----
 
 ## Project layout
 
@@ -259,19 +226,16 @@ brAIn/
 ├── mcp_server.py         # MCP server for Claude Code integration
 ├── lib/                  # Core modules (db, ingest, query, audit)
 ├── docs/
-│   ├── SKILL.md          # Claude extraction skill manifest
+│   ├── SKILL.md          # Claude extraction protocol
 │   └── SCHEMA.md         # Graph schema reference
 ├── ui/
 │   ├── backend/          # FastAPI backend
 │   └── frontend/         # React + Vite frontend
 ├── examples/
 │   └── sample.json       # Worked example (open-source project mortality)
-├── graph/kuzu_db/        # Persistent graph (created on first init)
 ├── projects/             # Extracted project payloads
 └── experiments/          # Research scripts (corpus download, extraction comparison)
 ```
-
----
 
 ## License
 
