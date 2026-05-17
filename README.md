@@ -38,30 +38,19 @@ You point Claude at a document. Claude reads it, extracts nodes and causal relat
 ```bash
 git clone git@github.com:SilenceKatharos/brAIn.git
 cd brAIn
-python3 -m venv .venv
-.venv/bin/pip install kuzu click
-
-.venv/bin/python brain.py init
-.venv/bin/python brain.py ingest examples/sample.json
-
-.venv/bin/python brain.py stats
-.venv/bin/python brain.py effects bus_factor_of_one
-.venv/bin/python brain.py paths bus_factor_of_one project_death
+./install.sh
 ```
 
-**Optional: global `brain` command.**
+`install.sh` handles everything: virtual environment, Python dependencies, graph schema, knowledge payload ingestion, and the global `brain` CLI wrapper. It also prints the exact JSON snippets to add to `~/.claude/settings.json` for the MCP server and hooks.
 
 ```bash
-cat > ~/.local/bin/brain << 'EOF'
-#!/usr/bin/env bash
-exec /absolute/path/to/brAIn/.venv/bin/python /absolute/path/to/brAIn/brain.py "$@"
-EOF
-chmod +x ~/.local/bin/brain
-
+# Quick test after install
 brain stats
-brain find redis
-brain effects cache_miss_storm
+brain effects bus_factor_of_one
+brain paths bus_factor_of_one project_death
 ```
+
+> **Rebuilding the graph only** (if `graph/` was deleted): `./install.sh --no-ui` re-ingests all payloads from `projects/` without reinstalling dependencies.
 
 ## Using with Claude Code
 
@@ -245,6 +234,7 @@ Any non-empty string is accepted. Unknown types are logged to `extension_request
 
 ```
 brAIn/
+├── install.sh            # One-command installer (venv, deps, graph, brain CLI)
 ├── brain.py              # CLI entrypoint (pure plumbing, no semantic logic)
 ├── mcp_server.py         # MCP server — 8 graph tools for Claude Code
 ├── brain_hook.sh         # PostToolUse hook (graph-sync enforcement)
