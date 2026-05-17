@@ -1,0 +1,131 @@
+{
+  "doc_id": "project_brain_hooks",
+  "nodes": [
+    {
+      "id": "claude_hooks_integration",
+      "label": "claude hooks integration",
+      "type": "mechanism",
+      "description": "brAIn integrates with the Claude Code hook system to nudge users into keeping the graph in sync with the code. Three hooks: SessionStart (brain_session_start.sh) timestamps the session and clears tmp state; PostToolUse (brain_hook.sh) logs every Edit/Write target and injects a per-tool reminder for Claude; Stop (brain_stop_check.py) blocks once if files were modified without any graph update during the session.",
+      "importance": 0.9,
+      "sources": ["project_brain_hooks", "project:brain"]
+    },
+    {
+      "id": "brain_session_start_hook",
+      "label": "brain session start hook",
+      "type": "artifact",
+      "description": "brain_session_start.sh — SessionStart hook. Writes the current UTC ISO timestamp to /tmp/brain_session_start.txt and removes any leftover /tmp/brain_session_modified.txt and /tmp/brain_stop_blocked.txt from a previous session. Provides the baseline timestamp that the Stop hook compares against Node.updated_at.",
+      "importance": 0.7,
+      "sources": ["project_brain_hooks", "project:brain"]
+    },
+    {
+      "id": "brain_posttooluse_hook",
+      "label": "brain posttooluse hook",
+      "type": "artifact",
+      "description": "brain_hook.sh — PostToolUse hook fired after every Edit/Write. Pipes stdin through jq to extract tool_input.file_path / tool_input.new_file_path, appends the path to /tmp/brain_session_modified.txt, then emits a hookSpecificOutput JSON object that injects 'this file was modified; if it contains a structural decision update the graph with brain_find + brain_ingest' as additionalContext for Claude. The reminder is suppressOutput-flagged so it does not clutter the terminal.",
+      "importance": 0.9,
+      "sources": ["project_brain_hooks", "project:brain"]
+    },
+    {
+      "id": "brain_stop_check_hook",
+      "label": "brain stop check hook",
+      "type": "artifact",
+      "description": "brain_stop_check.py — Stop hook. If files were modified during the session but no Node.updated_at is >= session_start, returns {continue: false, stopReason: 'review your changes for structural decisions before terminating'} so Claude is forced to reconsider. Marks the session as already-blocked via /tmp/brain_stop_blocked.txt; the second Stop invocation always allows so the user can override after Claude's review. Listed files capped at 20 to keep the message readable.",
+      "importance": 0.9,
+      "sources": ["project_brain_hooks", "project:brain"]
+    },
+    {
+      "id": "session_start_timestamp_file",
+      "label": "session start timestamp file",
+      "type": "artifact",
+      "description": "/tmp/brain_session_start.txt — single line: UTC ISO timestamp written by the SessionStart hook. Read by the Stop hook to compare against Node.updated_at via a Cypher query. Falls back to (now - 1h) if the file is missing, so a session started before the hook was installed still has a sensible baseline.",
+      "importance": 0.55,
+      "sources": ["project_brain_hooks", "project:brain"]
+    },
+    {
+      "id": "modified_files_log_file",
+      "label": "modified files log file",
+      "type": "artifact",
+      "description": "/tmp/brain_session_modified.txt — append-only list of every file path touched by Edit/Write during the session. Written by the PostToolUse hook, read by the Stop hook. Cleaned up by SessionStart (next session) and by the Stop hook on cleanup() path. The presence-of-content is what triggers the Stop block.",
+      "importance": 0.6,
+      "sources": ["project_brain_hooks", "project:brain"]
+    },
+    {
+      "id": "stop_blocked_marker_file",
+      "label": "stop blocked marker file",
+      "type": "artifact",
+      "description": "/tmp/brain_stop_blocked.txt — sentinel file. Written when the Stop hook blocks a session for the first time. Checked at the top of the next Stop invocation: if present, allow unconditionally (and clean up). Implements the 'block once, then trust' policy — Claude only sees the prompt once, the user can finish the session after reviewing.",
+      "importance": 0.7,
+      "sources": ["project_brain_hooks", "project:brain"]
+    },
+    {
+      "id": "block_once_then_trust_policy",
+      "label": "block once then trust policy",
+      "type": "claim",
+      "description": "Design choice for the Stop hook: it blocks at MOST ONCE per session. Rationale: a hard block would frustrate users on small refactors that genuinely don't need graph updates. A single block-and-prompt is enough to bring graph-update intent into Claude's working context without turning the hook into an obstacle.",
+      "importance": 0.85,
+      "sources": ["project_brain_hooks", "project:brain"]
+    },
+    {
+      "id": "graph_update_detection_query",
+      "label": "graph update detection query",
+      "type": "mechanism",
+      "description": "Stop hook query: MATCH (n:Node) WHERE n.updated_at >= $start RETURN count(n). If any node was updated since session_start, the hook treats the session as graph-synced and allows termination. NOT a strict 'changes match' check — any graph activity satisfies the gate; the assumption is that if Claude touched the graph at all during the session, it has already engaged with the structural-decision question.",
+      "importance": 0.85,
+      "sources": ["project_brain_hooks", "project:brain"]
+    },
+    {
+      "id": "hook_failure_is_silent_pass",
+      "label": "hook failure is silent pass",
+      "type": "claim",
+      "description": "Stop hook wraps the Kuzu query in try/except and on any exception calls cleanup() and exits 0. Rationale: a broken DB or stale schema must NOT prevent the user from ending a session. The hook is a nudge, not a gate — if it cannot operate, it stays out of the way.",
+      "importance": 0.7,
+      "sources": ["project_brain_hooks", "project:brain"]
+    },
+    {
+      "id": "skill_command_brain_status",
+      "label": "skill command brain status",
+      "type": "artifact",
+      "description": ".claude/commands/brain-status.md — slash command 'brain-status' available in Claude Code. Runs `brain stats` and `brain audit`, summarizes counts and warnings. Idiomatic 'where is the graph right now' check at the start of a session.",
+      "importance": 0.6,
+      "sources": ["project_brain_hooks", "project:brain"]
+    },
+    {
+      "id": "skill_command_brain_query",
+      "label": "skill command brain query",
+      "type": "artifact",
+      "description": ".claude/commands/brain-query.md — slash command 'brain-query' that takes a question, maps it to the right CLI command (find / causes / effects / paths / show / query), and asks Claude to cite the evidence field and flag chains with confidence below 0.6.",
+      "importance": 0.7,
+      "sources": ["project_brain_hooks", "project:brain"]
+    },
+    {
+      "id": "skill_command_ingest",
+      "label": "skill command ingest",
+      "type": "artifact",
+      "description": ".claude/commands/ingest.md — slash command 'ingest' that walks Claude through the 6-step SKILL.md ingestion workflow for a given document: read in full, extract 10-50 nodes with comprehensive descriptions, extract relations with rich evidence, anti-dup via `brain find`, save and ingest, verify with stats+audit.",
+      "importance": 0.7,
+      "sources": ["project_brain_hooks", "project:brain"]
+    }
+  ],
+  "rels": [
+    {"src": "brain_session_start_hook", "dst": "claude_hooks_integration", "type": "part_of", "confidence": 1.0, "evidence": "One of the three brAIn hooks; fires on SessionStart.", "sources": ["project_brain_hooks", "project:brain"]},
+    {"src": "brain_posttooluse_hook", "dst": "claude_hooks_integration", "type": "part_of", "confidence": 1.0, "evidence": "One of the three brAIn hooks; fires after every Edit/Write tool call.", "sources": ["project_brain_hooks", "project:brain"]},
+    {"src": "brain_stop_check_hook", "dst": "claude_hooks_integration", "type": "part_of", "confidence": 1.0, "evidence": "One of the three brAIn hooks; fires when the session is about to end.", "sources": ["project_brain_hooks", "project:brain"]},
+    {"src": "brain_session_start_hook", "dst": "session_start_timestamp_file", "type": "causes", "confidence": 1.0, "evidence": "Writes the timestamp to /tmp/brain_session_start.txt.", "sources": ["project_brain_hooks", "project:brain"]},
+    {"src": "brain_session_start_hook", "dst": "brain_stop_check_hook", "type": "precedes", "confidence": 0.95, "evidence": "Establishes the baseline timestamp the Stop hook reads.", "sources": ["project_brain_hooks", "project:brain"]},
+    {"src": "brain_posttooluse_hook", "dst": "modified_files_log_file", "type": "causes", "confidence": 1.0, "evidence": "Appends each modified file path to /tmp/brain_session_modified.txt.", "sources": ["project_brain_hooks", "project:brain"]},
+    {"src": "brain_stop_check_hook", "dst": "session_start_timestamp_file", "type": "requires", "confidence": 1.0, "evidence": "Reads the timestamp to bound the Kuzu update query.", "sources": ["project_brain_hooks", "project:brain"]},
+    {"src": "brain_stop_check_hook", "dst": "modified_files_log_file", "type": "requires", "confidence": 1.0, "evidence": "Reads the list of modified files to compose the block message.", "sources": ["project_brain_hooks", "project:brain"]},
+    {"src": "brain_stop_check_hook", "dst": "stop_blocked_marker_file", "type": "causes", "confidence": 1.0, "evidence": "Writes the sentinel on first block.", "sources": ["project_brain_hooks", "project:brain"]},
+    {"src": "block_once_then_trust_policy", "dst": "stop_blocked_marker_file", "type": "requires", "confidence": 1.0, "evidence": "The sentinel file is the state that records 'already blocked once this session'.", "sources": ["project_brain_hooks", "project:brain"]},
+    {"src": "block_once_then_trust_policy", "dst": "brain_stop_check_hook", "type": "property_of", "confidence": 0.95, "evidence": "Codified by the early-return path when the sentinel exists.", "sources": ["project_brain_hooks", "project:brain"]},
+    {"src": "graph_update_detection_query", "dst": "brain_stop_check_hook", "type": "part_of", "confidence": 1.0, "evidence": "MATCH count(n) WHERE n.updated_at >= $start inside the Stop hook.", "sources": ["project_brain_hooks", "project:brain"]},
+    {"src": "hook_failure_is_silent_pass", "dst": "brain_stop_check_hook", "type": "property_of", "confidence": 0.95, "evidence": "try/except wrapping the Kuzu query falls back to cleanup() and exit 0.", "sources": ["project_brain_hooks", "project:brain"]},
+    {"src": "brain_posttooluse_hook", "dst": "brain_stop_check_hook", "type": "enables", "confidence": 0.9, "evidence": "The list of modified files written by PostToolUse is what the Stop hook compares against graph activity.", "sources": ["project_brain_hooks", "project:brain"]},
+    {"src": "claude_hooks_integration", "dst": "traceability_by_default", "type": "enables", "confidence": 0.6, "evidence": "Nudges keep the graph in sync with code changes so the project_brain doc_ids stay current.", "sources": ["project_brain_hooks", "project:brain"]},
+    {"src": "skill_command_brain_status", "dst": "cli_stats_command", "type": "requires", "confidence": 0.95, "evidence": "Slash command runs brain stats then brain audit.", "sources": ["project_brain_hooks", "project:brain"]},
+    {"src": "skill_command_brain_status", "dst": "cli_audit_command", "type": "requires", "confidence": 0.95, "evidence": "Slash command runs brain audit alongside stats.", "sources": ["project_brain_hooks", "project:brain"]},
+    {"src": "skill_command_brain_query", "dst": "query_question_to_command_mapping", "type": "instance_of", "confidence": 0.85, "evidence": "Walks the why/then/how mapping for the user's question.", "sources": ["project_brain_hooks", "project:brain"]},
+    {"src": "skill_command_brain_query", "dst": "flag_low_confidence_chain_rule", "type": "requires", "confidence": 0.9, "evidence": "Slash command explicitly asks Claude to flag chains with confidence < 0.6.", "sources": ["project_brain_hooks", "project:brain"]},
+    {"src": "skill_command_ingest", "dst": "extraction_workflow", "type": "instance_of", "confidence": 0.9, "evidence": "Walks the SKILL.md ingestion workflow for an arbitrary document.", "sources": ["project_brain_hooks", "project:brain"]}
+  ]
+}

@@ -21,8 +21,6 @@ function typeColor(t) {
   return TYPE_COLORS[t] || 'var(--type-default)'
 }
 
-const IMPORTANCE_THRESHOLD = 0.9
-const MIN_VISIBLE = 20
 
 export default function App() {
   const [stats, setStats] = useState(null)
@@ -100,13 +98,8 @@ export default function App() {
       base = new Set(searchResults.map(n => n['n.id']))
     } else {
       base = new Set()
-      allNodes.forEach(n => {
-        if ((n['n.importance'] ?? 0.5) >= IMPORTANCE_THRESHOLD) base.add(n['n.id'])
-      })
-      // Ensure minimum visibility even if importance calibration is off
-      if (base.size < MIN_VISIBLE) {
-        allNodes.slice(0, MIN_VISIBLE).forEach(n => base.add(n['n.id']))
-      }
+      // Default: show only the single highest-importance node; user expands from there
+      if (allNodes.length > 0) base.add(allNodes[0]['n.id'])
     }
 
     // Add 1-hop neighbors for every explicitly expanded node

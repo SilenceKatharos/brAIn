@@ -1,0 +1,290 @@
+{
+  "doc_id": "project_brain_cli",
+  "nodes": [
+    {
+      "id": "brain_py_cli",
+      "label": "brain py cli",
+      "type": "artifact",
+      "description": "brain.py — the click-based command-line entrypoint to the graph. Intentionally kept under 500 lines and free of semantic logic: every command is a thin wrapper that parses arguments, opens a Kuzu connection via lib.db.connect, dispatches to a function in lib/, and prints. The semantic logic lives in lib/. This split is why brain.py can be replaced or wrapped (global `brain` shim, the MCP server, the experiments) without touching ingestion/audit/query code.",
+      "importance": 0.95,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "click_command_group",
+      "label": "click command group",
+      "type": "mechanism",
+      "description": "The cli function is a click.group with a single shared option `--db PATH` and a context object carrying the db path. Every subcommand calls `_conn(ctx.obj['db_path'])` which falls back to DEFAULT_DB_PATH. This is how the global `brain` shim (point to a fixed brAIn install) and one-off `brain --db /tmp/test ingest ...` invocations coexist without separate code paths.",
+      "importance": 0.6,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "cli_init_command",
+      "label": "cli init command",
+      "type": "mechanism",
+      "description": "`brain init` — opens (or creates) the DB and runs init_schema. Idempotent: safe to run on an existing DB. First command a fresh install needs.",
+      "importance": 0.55,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "cli_ingest_command",
+      "label": "cli ingest command",
+      "type": "mechanism",
+      "description": "`brain ingest FILE.json` — loads the payload, calls lib.ingest.ingest_payload, then prints a one-block summary using the IngestReport fields (nodes_created/updated, rels_created/updated, purge counts, rejected_nodes count, rejected_rels count, rewritten_ids count, potential_duplicates count, skipped_rels count). Surfaces every audit signal in a single command so the user does not need a second tool to spot extraction issues.",
+      "importance": 0.85,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "cli_find_command",
+      "label": "cli find command",
+      "type": "mechanism",
+      "description": "`brain find PATTERN` — case-insensitive substring search by id or label, default limit 30. Output: one line per match with id [type] label and (if non-empty) description. The primary tool for the human-mode anti-duplicate check before authoring a new payload.",
+      "importance": 0.7,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "cli_show_command",
+      "label": "cli show command",
+      "type": "mechanism",
+      "description": "`brain show NODE_ID` — prints a node header (label, id, type, description, importance, sources) then two sections: ## Outgoing (each rel as `--[type c=NN f=...]--> dst (label)` plus the `« evidence »` lines) and ## Incoming. Exits 1 if the node does not exist.",
+      "importance": 0.75,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "cli_causes_command",
+      "label": "cli causes command",
+      "type": "mechanism",
+      "description": "`brain causes NODE [--depth 3]` — walks upstream via the CAUSAL_BACKWARD subset (causes/requires/enables/precedes), level by level. Prints each level distinctly so the user can read the causal chain top-down.",
+      "importance": 0.85,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "cli_effects_command",
+      "label": "cli effects command",
+      "type": "mechanism",
+      "description": "`brain effects NODE [--depth 3]` — walks downstream via the CAUSAL_FORWARD subset (causes/enables/precedes). Mirror of `brain causes`, level-by-level output.",
+      "importance": 0.85,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "cli_paths_command",
+      "label": "cli paths command",
+      "type": "mechanism",
+      "description": "`brain paths SRC DST [--max-hops 4] [--limit 10]` — enumerates paths between two nodes using Kuzu's variable-length pattern. Prints each path as a single arrow chain: `node1 --[type c=NN]--> node2 --[...]--> node3`. NOT restricted to causal types — any path explains connectivity.",
+      "importance": 0.75,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "cli_context_command",
+      "label": "cli context command",
+      "type": "mechanism",
+      "description": "`brain context TOPIC` — wraps lib.query.context_for_topic. JSON output by default (pipes cleanly into an LLM prompt), `--no-json` for human reading. Designed to be the heuristic preflight: pass the topic of the document you are about to extract, dump the JSON into the system prompt, the LLM reuses existing ids.",
+      "importance": 0.75,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "cli_query_command",
+      "label": "cli query command",
+      "type": "mechanism",
+      "description": "`brain query \"<cypher>\"` — raw escape hatch over lib.query.run_cypher. JSON output, empty result printed as `(empty result)`. Used for ad-hoc filtering the standard commands don't cover (e.g. all nodes added by a specific doc_id, all rels with low confidence).",
+      "importance": 0.7,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "cli_stats_command",
+      "label": "cli stats command",
+      "type": "mechanism",
+      "description": "`brain stats` — counts by node type and rel type, total node/rel counts. Cheap (two GROUP BY queries) — meant to be the first read after an ingest.",
+      "importance": 0.6,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "cli_audit_command",
+      "label": "cli audit command",
+      "type": "mechanism",
+      "description": "`brain audit [--json]` — runs lib.audit.run_audit, prints sections # Volumes, # Health (related_to ratio, no-description ratio, orphan ratio, single-source rels), # Avg confidence by rel type, # Top out-degree / in-degree, # Contributions by document, # Warnings, # Errors. Exits 0/1/2 from AuditReport.exit_code so CI can fail on errors.",
+      "importance": 0.85,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "cli_export_command",
+      "label": "cli export command",
+      "type": "mechanism",
+      "description": "`brain export FILE` — wraps lib.export_import.write_export. Single JSON dump of the whole graph, intended for backup or transfer between machines.",
+      "importance": 0.6,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "cli_import_command",
+      "label": "cli import command",
+      "type": "mechanism",
+      "description": "`brain import FILE [--strategy force|merge]` — wraps lib.export_import.read_import. Default strategy is `force` (wipe then load) so accidental imports do NOT silently mix two graphs. Note: the command is registered under the name 'import' (`@cli.command('import')`) because `import` is a reserved word in Python.",
+      "importance": 0.65,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "cli_merge_command",
+      "label": "cli merge command",
+      "type": "mechanism",
+      "description": "`brain merge SRC INTO DST` — explicit node merge. Syntax check: the second positional argument MUST be the literal word INTO (case-insensitive), otherwise click.UsageError. Designed for irreversible operations to read like English so the user double-checks direction (src disappears into dst, not the other way around).",
+      "importance": 0.7,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "into_keyword_safety",
+      "label": "into keyword safety",
+      "type": "claim",
+      "description": "The required INTO keyword in `brain merge SRC INTO DST` is a deliberate ergonomic guard against irreversibility. Without it, a typo in argument order would silently merge the wrong direction. Cost: typing three extra characters; benefit: the command reads as English and refuses obviously wrong invocations like `brain merge SRC DST`.",
+      "importance": 0.55,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "cli_pure_plumbing_design",
+      "label": "cli pure plumbing design",
+      "type": "claim",
+      "description": "Design rule for brain.py: no semantic logic above 'parse args / open connection / dispatch / print'. All branching that depends on graph content lives in lib/. Enables (a) MCP server reuse of the same lib functions, (b) UI backend reuse, (c) experiments scripts reuse, all without duplicating logic.",
+      "importance": 0.85,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "global_brain_shim",
+      "label": "global brain shim",
+      "type": "artifact",
+      "description": "Optional ~/.local/bin/brain shell wrapper that calls `.venv/bin/python /path/to/brain.py \"$@\"`. Lets the user type `brain stats` from anywhere instead of `cd ~/Documents/brAIn && .venv/bin/python brain.py stats`. The README documents the cat-EOF recipe.",
+      "importance": 0.5,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "mcp_server_py",
+      "label": "mcp server py",
+      "type": "artifact",
+      "description": "mcp_server.py — stdio MCP server exposing 8 graph tools to Claude. Registered globally in ~/.claude/settings.json under the `brain` server name so the tools are available in every Claude Code session regardless of the working directory. Uses the same lib/ functions as brain.py — the MCP layer is just the protocol adapter plus output formatters that mirror the CLI.",
+      "importance": 0.9,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "mcp_eight_tools",
+      "label": "mcp eight tools",
+      "type": "artifact",
+      "description": "The 8 MCP tools registered by mcp_server.py: brain_find, brain_show, brain_causes, brain_effects, brain_paths, brain_stats, brain_query, brain_ingest. Each tool's description names the expected use (e.g. brain_find: 'Use this to check whether a concept already exists before creating a node'). The tool docstrings are part of the system prompt Claude sees — they are short cheat-sheets, not API docs.",
+      "importance": 0.85,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "mcp_read_only_default_connection",
+      "label": "mcp read-only default connection",
+      "type": "mechanism",
+      "description": "`_conn(read_only=True)` is the default for the MCP server. Every tool except brain_ingest opens the DB in read-only mode — kuzu.Database(..., read_only=True). brain_ingest opens it writable. Rationale: lets multiple Claude sessions share the DB safely (Kuzu allows one writer + many readers); accidental destructive operations through query are impossible because the connection cannot write.",
+      "importance": 0.75,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "mcp_one_connection_per_call",
+      "label": "mcp one connection per call",
+      "type": "mechanism",
+      "description": "Each MCP tool call opens a fresh kuzu.Database/Connection. No long-lived connection is held across calls. Cost: connection-open latency on every call (in practice negligible for an embedded DB). Benefit: stale-state issues vanish; concurrent writes from another process (e.g. a CLI ingest while the MCP is running) are picked up immediately.",
+      "importance": 0.65,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "mcp_output_format_mirrors_cli",
+      "label": "mcp output format mirrors cli",
+      "type": "claim",
+      "description": "The MCP formatters (_fmt_find, _fmt_show, _fmt_chain, _fmt_paths, _fmt_stats) intentionally reproduce the brain.py CLI output verbatim. Reason: Claude is trained-by-context on the CLI's textual conventions (`-- level 1 --`, `« evidence »` quotes, `--[type c=0.95]-->`); if the MCP returned different shapes the model would re-learn the structure poorly each session.",
+      "importance": 0.7,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "mcp_exception_swallow",
+      "label": "mcp exception swallow",
+      "type": "mechanism",
+      "description": "call_tool wraps _dispatch in try/except and returns `Error: <message>` as a TextContent. Rationale: the MCP protocol does not gracefully recover from raised exceptions inside a tool call — Claude would see a transport error and the conversation might desync. Catching and stringifying preserves the conversational flow and gives Claude an actionable message it can interpret.",
+      "importance": 0.55,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "mcp_stdio_protocol",
+      "label": "mcp stdio protocol",
+      "type": "mechanism",
+      "description": "Server runs over mcp.server.stdio.stdio_server() — stdin/stdout JSON-RPC, no network. Matches how Claude Code spawns MCP servers: as child processes with piped stdio. No port, no auth, no network surface — security boundary is the file system.",
+      "importance": 0.5,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "mcp_global_registration",
+      "label": "mcp global registration",
+      "type": "mechanism",
+      "description": "MCP server is registered in `~/.claude/settings.json` (user-level), NOT in a project-local file. Consequence: the 8 brain tools are available in EVERY Claude Code session, regardless of where the user is working. The path-portable design pays off here — a single registration covers all projects.",
+      "importance": 0.8,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "cli_under_500_lines_rule",
+      "label": "cli under 500 lines rule",
+      "type": "claim",
+      "description": "Soft target for brain.py: stay under 500 lines. Enforces the pure-plumbing rule by exhaustion — once you cross 500 lines in brain.py, the new logic must go into lib/. Currently 388 lines, comfortable margin.",
+      "importance": 0.5,
+      "sources": ["project_brain_cli", "project:brain"]
+    },
+    {
+      "id": "json_output_default_for_machine_consumption",
+      "label": "json output default for machine consumption",
+      "type": "claim",
+      "description": "Commands aimed at piping into another tool (context, query, audit --json) default to JSON. Commands aimed at humans (show, causes, effects, paths, stats, audit) default to formatted text. The `--no-json` / `--json` flag flips the default where both modes make sense. Mixed defaults are intentional: one tool, two audiences.",
+      "importance": 0.5,
+      "sources": ["project_brain_cli", "project:brain"]
+    }
+  ],
+  "rels": [
+    {"src": "click_command_group", "dst": "brain_py_cli", "type": "part_of", "confidence": 1.0, "evidence": "Implementation choice: cli is a click.group sharing --db across subcommands.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_init_command", "dst": "brain_py_cli", "type": "part_of", "confidence": 1.0, "evidence": "One of the 14 subcommands.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_ingest_command", "dst": "brain_py_cli", "type": "part_of", "confidence": 1.0, "evidence": "One of the 14 subcommands.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_find_command", "dst": "brain_py_cli", "type": "part_of", "confidence": 1.0, "evidence": "One of the 14 subcommands.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_show_command", "dst": "brain_py_cli", "type": "part_of", "confidence": 1.0, "evidence": "One of the 14 subcommands.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_causes_command", "dst": "brain_py_cli", "type": "part_of", "confidence": 1.0, "evidence": "One of the 14 subcommands.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_effects_command", "dst": "brain_py_cli", "type": "part_of", "confidence": 1.0, "evidence": "One of the 14 subcommands.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_paths_command", "dst": "brain_py_cli", "type": "part_of", "confidence": 1.0, "evidence": "One of the 14 subcommands.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_context_command", "dst": "brain_py_cli", "type": "part_of", "confidence": 1.0, "evidence": "One of the 14 subcommands.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_query_command", "dst": "brain_py_cli", "type": "part_of", "confidence": 1.0, "evidence": "One of the 14 subcommands.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_stats_command", "dst": "brain_py_cli", "type": "part_of", "confidence": 1.0, "evidence": "One of the 14 subcommands.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_audit_command", "dst": "brain_py_cli", "type": "part_of", "confidence": 1.0, "evidence": "One of the 14 subcommands.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_export_command", "dst": "brain_py_cli", "type": "part_of", "confidence": 1.0, "evidence": "One of the 14 subcommands.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_import_command", "dst": "brain_py_cli", "type": "part_of", "confidence": 1.0, "evidence": "One of the 14 subcommands.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_merge_command", "dst": "brain_py_cli", "type": "part_of", "confidence": 1.0, "evidence": "One of the 14 subcommands.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_init_command", "dst": "idempotent_schema_setup", "type": "instance_of", "confidence": 0.9, "evidence": "`brain init` is the user-facing wrapper around init_schema.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_ingest_command", "dst": "lib_ingest_module", "type": "requires", "confidence": 1.0, "evidence": "Calls lib.ingest.ingest_payload to perform the 4-phase upsert.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_find_command", "dst": "find_nodes_substring_search", "type": "instance_of", "confidence": 0.95, "evidence": "Wraps lib.query.find_nodes.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_find_command", "dst": "brain_find_interactive_protocol", "type": "enables", "confidence": 0.85, "evidence": "Provides the lookup primitive the interactive anti-dup protocol expects.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_show_command", "dst": "lib_query_module", "type": "requires", "confidence": 0.95, "evidence": "Calls lib.query.show_node and renders the result.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_causes_command", "dst": "causal_backward_subset", "type": "requires", "confidence": 1.0, "evidence": "Passes CAUSAL_BACKWARD to lib.query.walk.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_effects_command", "dst": "causal_forward_subset", "type": "requires", "confidence": 1.0, "evidence": "Passes CAUSAL_FORWARD to lib.query.walk.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_paths_command", "dst": "paths_variable_length_query", "type": "instance_of", "confidence": 1.0, "evidence": "Wraps lib.query.paths.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_context_command", "dst": "context_for_topic_function", "type": "instance_of", "confidence": 1.0, "evidence": "Wraps lib.query.context_for_topic.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_query_command", "dst": "lib_query_module", "type": "requires", "confidence": 0.9, "evidence": "Calls lib.query.run_cypher.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_stats_command", "dst": "lib_query_module", "type": "requires", "confidence": 0.95, "evidence": "Calls lib.query.stats.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_audit_command", "dst": "lib_audit_module", "type": "instance_of", "confidence": 1.0, "evidence": "Wraps lib.audit.run_audit.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_audit_command", "dst": "audit_exit_code_property", "type": "requires", "confidence": 0.9, "evidence": "Exits with the report's exit_code so CI can gate on health.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_export_command", "dst": "lib_export_import_module", "type": "requires", "confidence": 1.0, "evidence": "Calls lib.export_import.write_export.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_import_command", "dst": "lib_export_import_module", "type": "requires", "confidence": 1.0, "evidence": "Calls lib.export_import.read_import.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_merge_command", "dst": "lib_merge_module", "type": "requires", "confidence": 1.0, "evidence": "Calls lib.merge.merge_nodes.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "into_keyword_safety", "dst": "cli_merge_command", "type": "part_of", "confidence": 0.95, "evidence": "Enforced via a UsageError check in the merge subcommand definition.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "into_keyword_safety", "dst": "merge_irreversibility", "type": "prevents", "confidence": 0.85, "evidence": "Requiring INTO catches wrong-direction merge invocations before they execute the irreversible delete.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_pure_plumbing_design", "dst": "brain_py_cli", "type": "property_of", "confidence": 0.95, "evidence": "Stated design rule for brain.py.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_under_500_lines_rule", "dst": "cli_pure_plumbing_design", "type": "enables", "confidence": 0.8, "evidence": "The line cap is the structural enforcement of the pure-plumbing rule: when it would be exceeded, logic must move into lib.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "global_brain_shim", "dst": "brain_py_cli", "type": "enables", "confidence": 0.85, "evidence": "A tiny shell wrapper turns brain.py into a globally-callable command without changing the underlying script.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "mcp_server_py", "dst": "lib_package", "type": "requires", "confidence": 1.0, "evidence": "Imports lib.db, lib.ingest, lib.query and reuses their functions verbatim.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "mcp_eight_tools", "dst": "mcp_server_py", "type": "part_of", "confidence": 1.0, "evidence": "TOOLS list in mcp_server.py defines all 8 tools.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "mcp_read_only_default_connection", "dst": "mcp_server_py", "type": "part_of", "confidence": 1.0, "evidence": "Default read_only=True in _conn().", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "mcp_read_only_default_connection", "dst": "mcp_eight_tools", "type": "enables", "confidence": 0.85, "evidence": "Read-only connections let multiple Claude sessions share the DB and prevent destructive operations through brain_query.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "mcp_one_connection_per_call", "dst": "mcp_server_py", "type": "part_of", "confidence": 1.0, "evidence": "Every tool dispatcher calls _conn() afresh.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "mcp_output_format_mirrors_cli", "dst": "mcp_server_py", "type": "property_of", "confidence": 0.9, "evidence": "The _fmt_* helpers reproduce brain.py's textual conventions.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "mcp_exception_swallow", "dst": "mcp_server_py", "type": "part_of", "confidence": 1.0, "evidence": "call_tool wraps _dispatch in try/except to keep the conversational flow on errors.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "mcp_stdio_protocol", "dst": "mcp_server_py", "type": "part_of", "confidence": 1.0, "evidence": "main() awaits mcp.server.stdio.stdio_server().", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "mcp_stdio_protocol", "dst": "mcp_server_py", "type": "enables", "confidence": 0.8, "evidence": "Stdio is what makes the MCP server a zero-network attack surface — security boundary is the filesystem.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "mcp_global_registration", "dst": "mcp_server_py", "type": "enables", "confidence": 0.85, "evidence": "Registering in ~/.claude/settings.json makes the 8 tools session-wide and project-wide.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "mcp_global_registration", "dst": "domain_agnostic_installable_anywhere", "type": "requires", "confidence": 0.7, "evidence": "Global registration is only safe because brAIn has no working-directory dependencies.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "json_output_default_for_machine_consumption", "dst": "brain_py_cli", "type": "property_of", "confidence": 0.85, "evidence": "Mixed-defaults convention applied across the CLI.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "mcp_server_py", "dst": "brain_py_cli", "type": "similar_to", "confidence": 0.75, "evidence": "Two interfaces over the same lib/ — different protocols (CLI args vs MCP tool calls), same semantic operations.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "cli_ingest_command", "dst": "ingestreport_dataclass", "type": "requires", "confidence": 0.85, "evidence": "Prints the IngestReport fields as a one-block summary.", "sources": ["project_brain_cli", "project:brain"]},
+    {"src": "mcp_eight_tools", "dst": "ingestreport_dataclass", "type": "requires", "confidence": 0.6, "evidence": "brain_ingest tool formats its response from IngestReport.", "sources": ["project_brain_cli", "project:brain"]}
+  ]
+}

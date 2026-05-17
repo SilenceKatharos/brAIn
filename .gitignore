@@ -28,6 +28,8 @@ Brain/
 
 # Personal project payloads (not examples)
 projects/monai/
+projects/calcapp/
+projects/logpilot/
 
 # Experiment artifacts
 experiments/*/corpus/

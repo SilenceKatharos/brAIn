@@ -147,46 +147,67 @@ def get_types():
 
 _jobs: dict[str, dict] = {}
 
-INGEST_PROMPT = """\
-You are a brAIn extraction agent. Your only mission: ingest the project at {folder_path} \
-(project name: {project_name}) into the brAIn causal knowledge graph.
+INGEST_PROMPT_TEMPLATE = """\
+You are a brAIn extraction agent. Your only mission: ingest the project at FOLDER_PATH \
+(project name: PROJECT_NAME) into the brAIn causal knowledge graph.
 
-Working directory: /home/marius/Documents/brAIn
+Working directory: BRAIN_ROOT
+
+== GOAL ==
+After this session, the graph must be self-sufficient: someone reading only the graph \
+must be able to fully reconstruct the project without reading a single source file.
 
 == PROTOCOL ==
-STEP 1 — Read /home/marius/Documents/brAIn/docs/SKILL.md in full. \
+STEP 1 - Read BRAIN_ROOT/docs/SKILL.md in full. \
 This defines the exact extraction protocol you must follow.
 
-STEP 2 — List all .md files in {folder_path} that contain design or technical content. \
-Skip: node_modules/, .git/, dist/, build/, site-v2/node_modules/, simulateur/
+STEP 2 - Discover all relevant files in FOLDER_PATH. Collect:
+  - Documentation: *.md
+  - Backend code: *.py
+  - Frontend code: *.jsx, *.tsx, *.js, *.ts (skip *.config.js, *.test.*)
+  - Scripts & hooks: *.sh
+  Skip entirely: node_modules/, .git/, dist/, build/, __pycache__/, .venv/, \
+*.pyc, *.lock, *.min.js
 
-STEP 3 — For each file:
-  a. Read it fully.
-  b. Inventory every ## section as an explicit checklist.
-  c. Extract nodes and relations following SKILL.md (section inventory → entity pass → \
-relation pass → completeness+orphan review).
-  d. Save the JSON payload to:
-     /home/marius/Documents/brAIn/projects/{project_name}/project_{project_name}_<aspect>.json
-     where <aspect> is a short snake_case descriptor of the file's theme (e.g. vision, economy).
-  e. Every node and rel must have:
-     - sources: ["project_{project_name}_<aspect>", "project:{project_name}"]
-  f. Node IDs must match slugify(label): plain ASCII, snake_case, no parentheses/slashes/dots.
-     The CLI rewrites IDs to slugify(label) — use slugify(label) directly as ID to avoid \
-rel-skipping.
+Group the files by theme into extraction batches (e.g. docs, lib_pipeline, cli, \
+ui_backend, ui_frontend, hooks). Each batch becomes one JSON payload.
 
-STEP 4 — Ingest each payload (run from /home/marius/Documents/brAIn):
-  .venv/bin/python brain.py ingest projects/{project_name}/project_{project_name}_<aspect>.json
+STEP 3 - For each file in each batch:
+  a. Read it fully - no skimming.
+  b. For .md files: inventory every ## section as a checklist; apply the full \
+SKILL.md extraction protocol.
+  c. For code files (.py, .jsx, .js, .sh): extract DECISIONS, not implementation \
+details. Ask for each module/function: why does this exist? what does it prevent or \
+enable? what alternative was rejected and why? what are its known limits?
+     Do NOT extract: variable names, line-by-line logic, boilerplate, imports.
+     DO extract: module purpose, design pattern chosen, security rationale, \
+concurrency strategy, data structure choice and why, error handling philosophy, \
+API contract and its constraints.
+  d. Before creating any node, call brain_find to check if an equivalent node exists. \
+Reuse its exact id if found.
+  e. Save each JSON payload to:
+     BRAIN_ROOT/projects/PROJECT_NAME/project_PROJECT_NAME_<batch>.json
+  f. Every node and rel must include in sources:
+     ["project_PROJECT_NAME_<batch>", "project:PROJECT_NAME"]
+  g. Node IDs: plain ASCII snake_case, no parentheses/slashes/dots. \
+Use slugify(label) directly as ID to avoid silent rel-skipping by the CLI.
 
-STEP 5 — After all files, verify:
+STEP 4 - Ingest each payload (run from BRAIN_ROOT):
+  .venv/bin/python brain.py ingest projects/PROJECT_NAME/project_PROJECT_NAME_<batch>.json
+
+STEP 5 - After all batches, verify:
   .venv/bin/python brain.py stats
   .venv/bin/python brain.py audit
 
-STEP 6 — Gap verification (SKILL.md Step 7) for each doc_id:
-  .venv/bin/python brain.py query "MATCH (n:Node) WHERE 'project_{project_name}_<aspect>' \
-IN n.sources RETURN n.label, n.type ORDER BY n.importance DESC"
-  Then re-read the source file section by section and identify any gaps. Re-ingest if needed.
+STEP 6 - Gap verification for each batch:
+  .venv/bin/python brain.py query \
+"MATCH (n:Node) WHERE any(s IN n.sources WHERE s = 'project_PROJECT_NAME_<batch>') \
+RETURN n.label, n.type ORDER BY n.importance DESC"
+  Re-read the source files section by section. For each file: is every significant \
+decision represented in the graph? If not, add missing nodes and re-ingest \
+(re-ingestion on same doc_id is safe and idempotent).
 
-Report a summary of what was done (nodes created, rels created, gaps found/resolved). \
+Report a summary: nodes created, rels created, files covered, gaps found/resolved. \
 Be autonomous and thorough.\
 """
 
@@ -219,9 +240,11 @@ def _run_ingestion(job_id: str, project_name: str, folder_path: str) -> None:
     project_dir = ROOT / "projects" / project_name
     project_dir.mkdir(parents=True, exist_ok=True)
 
-    prompt = INGEST_PROMPT.format(
-        project_name=project_name,
-        folder_path=folder_path,
+    prompt = (
+        INGEST_PROMPT_TEMPLATE
+        .replace("BRAIN_ROOT", str(ROOT))
+        .replace("PROJECT_NAME", project_name)
+        .replace("FOLDER_PATH", folder_path)
     )
 
     cmd = [

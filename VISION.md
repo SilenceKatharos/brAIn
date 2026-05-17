@@ -298,4 +298,4 @@ La retrieval est pilotée par l'extraction elle-même, pas par un skim préventi
 - Types de relations **stricts** : whitelist dure, tout type inconnu est rejeté + loggé. Les relations sont le cœur sémantique du graphe, leur vocabulaire ne doit pas dériver.
 - La retrieval est **à la demande** (tool calls) et non préventive (pas d'injection de tout le graphe).
 - Code, doc technique, README et SKILL.md en **anglais**. Ce VISION.md reste en français.
-- Le projet vit dans `/home/marius/Documents/brAIn/` pendant les phases 0-1. Phase 2+ à confirmer.
+- Le projet est conçu pour s'installer dans n'importe quel dossier local. Aucun chemin absolu hardcodé.

@@ -76,7 +76,7 @@
       "label": "brain.py CLI",
       "type": "artifact",
       "importance": 0.8,
-      "description": "Main entry point at /home/marius/Documents/brAIn/brain.py. Commands: init (create Kuzu schema), ingest <path> (validate + persist JSON payload), find <query> (full-text search), show <id> (node detail + relations), causes <id> (upstream chain), effects <id> (downstream chain), paths <a> <b> (all paths between two nodes), query <cypher> (raw Cypher), stats (counts by type), audit (quality metrics: orphans, related_to ratio, low-confidence edges), merge <a> <b> (merge two nodes). Global wrapper at ~/.local/bin/brain."
+      "description": "Main CLI entry point (brain.py at project root). Commands: init (create Kuzu schema), ingest <path> (validate + persist JSON payload), find <query> (full-text search), show <id> (node detail + relations), causes <id> (upstream chain), effects <id> (downstream chain), paths <a> <b> (all paths between two nodes), query <cypher> (raw Cypher), stats (counts by type), audit (quality metrics: orphans, related_to ratio, low-confidence edges), merge <a> <b> (merge two nodes). Global wrapper installable at ~/.local/bin/brain."
     }
   ],
   "rels": [

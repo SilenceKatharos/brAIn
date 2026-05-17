@@ -1,0 +1,596 @@
+{
+  "doc_id": "project_brain_docs",
+  "nodes": [
+    {
+      "id": "brain_project",
+      "label": "brAIn project",
+      "type": "artifact",
+      "description": "A persistent causal knowledge graph designed as external long-term memory for Claude. Stores the causal STRUCTURE extracted from documents (atomic claims linked by typed edges) rather than the text itself, so future sessions can answer 'why X', 'what if Y' and 'how A leads to B' without re-reading sources. Generalist: any domain, installs in any local folder, no hardcoded paths. Code/doc/README/SKILL in English; VISION.md in French. Contains zero LLM calls inside lib/ — all intelligence lives in Claude; brain.py is pure plumbing (validation, dedup, Cypher, persistence).",
+      "importance": 1.0,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "causal_knowledge_graph",
+      "label": "Causal knowledge graph",
+      "type": "concept",
+      "description": "The data structure brAIn maintains: a graph of atomic assertions (nodes) connected by typed relations whose semantic core is causal (causes/prevents/requires/enables) rather than associative. Distinguishes brAIn from RAG (which stores text chunks) and from wikis (whose unit is a page). The traversal unit is the sub-graph, not the document.",
+      "importance": 1.0,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "graph_is_the_asset_not_the_code",
+      "label": "Graph is the asset not the code",
+      "type": "claim",
+      "description": "Founding conviction #1 of brAIn. The code base is intentionally simple and replaceable. The graph compounds in value over time as more documents are extracted. Therefore engineering investment is biased toward graph quality (vocabulary discipline, extraction protocol, audits) rather than feature breadth in the CLI or UI.",
+      "importance": 0.95,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "structure_over_text_storage",
+      "label": "Structure over text storage",
+      "type": "claim",
+      "description": "brAIn does not store the text of source documents — it stores the structured assertions extracted from them. The source paragraph 'TTL was 5s, requests every 30s, so cache missed and DB latency rose' becomes four nodes (ttl_5_seconds, request_interval_30s, cache_miss_storm, db_fallback, p99_latency_800ms) linked by typed edges with one-sentence evidence each.",
+      "importance": 1.0,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "assertion_over_paragraph",
+      "label": "Assertion over paragraph",
+      "type": "claim",
+      "description": "Founding conviction #2. A typed edge (`ttl_too_short --causes--> cache_miss_storm`) plus a one-sentence `evidence` is more useful than three paragraphs to re-read. Tokens spent re-reading a paragraph every session are tokens not spent reasoning.",
+      "importance": 0.9,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "causality_first_principle",
+      "label": "Causality first principle",
+      "type": "claim",
+      "description": "Founding conviction #3. Causal relations (causes/prevents/requires/enables) are primary; taxonomic relations (is_a/part_of/instance_of) are auxiliary support structure. The graph's value comes from causal traversability — being able to walk upstream from an outcome to its root causes — not from neat ontology.",
+      "importance": 0.9,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "source_document_disposability",
+      "label": "Source document disposability",
+      "type": "claim",
+      "description": "Founding conviction #4 and the operational test of extraction quality: after ingestion, you should be able to delete the source document and keep reasoning. If you cannot, the extraction was incomplete. This forces descriptions to be comprehensive (mechanism, variants, examples) rather than one-liners.",
+      "importance": 0.95,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "traceability_by_default",
+      "label": "Traceability by default",
+      "type": "claim",
+      "description": "Founding conviction #5. Every node and every edge carries `sources` (origin doc_ids) and edges carry `evidence` (the reasoning that justified the relation). You can always trace why a fact is in the graph, and which document introduced it. The `evidences[]` array is parallel to `sources[]` so `evidences[i]` comes from `sources[i]`.",
+      "importance": 0.9,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "on_demand_retrieval",
+      "label": "On-demand retrieval",
+      "type": "claim",
+      "description": "Founding conviction #6. The graph is the long-term memory; Claude's context window is the working memory. The whole graph is NEVER loaded into context. Instead, when Claude is processing a concept it calls a tool (query_graph, get_node, traverse, cypher) that returns just the 1-hop neighborhood it needs at that moment. Retrieval is driven by extraction need, not by a preemptive skim heuristic.",
+      "importance": 1.0,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "working_vs_long_term_memory_split",
+      "label": "Working vs long-term memory split",
+      "type": "mechanism",
+      "description": "Memory model of brAIn. Working memory = Claude's context window (short-term, only what is active in the conversation). Long-term memory = Kuzu graph (persistent, dense, structured). The bridge between the two is tool calls: when Claude needs a concept, it names it and the tool returns the exact neighborhood. This separates 'what I'm reasoning about now' from 'what I know in general'.",
+      "importance": 0.9,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "domain_agnostic_installable_anywhere",
+      "label": "Domain-agnostic installable anywhere",
+      "type": "property",
+      "description": "brAIn is designed to be installed in any local folder. No paths are hardcoded; DEFAULT_DB_PATH is resolved relative to the project root. The graph can hold knowledge from any domain (software postmortems, ML concepts, project decisions, scientific papers). Tagging conventions (sources: ['project:<name>']) keep separate domains coexistent in one graph.",
+      "importance": 0.7,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "not_a_note_taking_system",
+      "label": "Not a note-taking system",
+      "type": "claim",
+      "description": "brAIn deliberately is NOT Obsidian / Notion / Logseq. You inject documents into it; you do not author free-form notes inside it. Linear note-taking belongs in a markdown file or a vault — brAIn stores structure, not prose.",
+      "importance": 0.7,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "not_a_textual_rag",
+      "label": "Not a textual RAG",
+      "type": "claim",
+      "description": "brAIn does not store chunks of source text and does not retrieve paragraphs by vector similarity. It stores extracted causal structure and retrieves sub-graphs by id, traversal, or Cypher query. Distinct positioning from vector-database RAG pipelines.",
+      "importance": 0.8,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "not_claude_conversational_auto_memory",
+      "label": "Not Claude conversational auto-memory",
+      "type": "claim",
+      "description": "brAIn models a DOMAIN of knowledge (concepts, mechanisms, decisions); Claude's auto-memory (~/.claude/.../memory/) holds USER preferences and personal context. The two systems are complementary and intentionally separate.",
+      "importance": 0.7,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "not_a_keyword_search_engine",
+      "label": "Not a keyword search engine",
+      "type": "claim",
+      "description": "brAIn's primary operations are TRAVERSE (walk causes/effects/paths) and REASON (cite evidence), not SEARCH (match keywords). Substring matching exists only as a lookup helper to find the right starting node.",
+      "importance": 0.6,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "kuzu_embedded_db_choice",
+      "label": "Kuzu embedded DB choice",
+      "type": "entity",
+      "description": "The graph engine: Kuzu, an embedded Cypher-compatible graph database. Storage lives locally in graph/kuzu_db/. No server, no cloud, no daemon. Accessed via the official Python binding. Chosen to keep brAIn fully local and runnable without infrastructure.",
+      "importance": 0.85,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "single_node_single_rel_table_schema",
+      "label": "Single Node single Rel table schema",
+      "type": "mechanism",
+      "description": "Schema strategy: exactly ONE node table and ONE relation table, regardless of node/relation type. The semantic type is stored as a STRING property on each row, not as a separate Kuzu table. Rationale: enables open node-type vocabulary and unified Cypher queries across all types; avoids combinatorial schema growth as the type list evolves.",
+      "importance": 0.9,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "node_table_columns",
+      "label": "Node table columns",
+      "type": "artifact",
+      "description": "Node(id STRING PK, label STRING, type STRING, description STRING, importance DOUBLE DEFAULT 0.5, created_at STRING, updated_at STRING, sources STRING[]). id is canonical slugify(label). description holds the comprehensive paragraph that makes the source disposable. sources accumulates every doc_id that introduced or referenced the node.",
+      "importance": 0.85,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "rel_table_columns",
+      "label": "Rel table columns",
+      "type": "artifact",
+      "description": "Rel(FROM Node TO Node, type STRING, confidence DOUBLE DEFAULT 0.8, evidences STRING[], factors STRING[], sources STRING[], created_at STRING, updated_at STRING). evidences and sources are parallel arrays: evidences[i] is the justification asserted by sources[i]. confidence is the MAX confidence observed across all asserting documents.",
+      "importance": 0.85,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "slugified_id_rule",
+      "label": "Slugified id rule",
+      "type": "mechanism",
+      "description": "Node id is always canonical slugify(label): NFKD-decompose, drop non-ASCII, lowercase, non-alphanumerics → '_', collapse runs of '_', trim, truncate to 80 chars at the last '_' boundary in the second half. If a payload supplies a different id, the ingester rewrites to canonical and logs a rewritten_ids entry. Guarantees id stability across re-extractions of the same concept.",
+      "importance": 0.95,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "edge_dedup_on_src_dst_type_triple",
+      "label": "Edge dedup on src dst type triple",
+      "type": "mechanism",
+      "description": "At most ONE Rel exists per (src, dst, type) triple. Multiple documents asserting the same edge accumulate their evidence and doc_id in the parallel evidences[]/sources[] arrays. confidence is set to max. Kuzu itself allows duplicate edges between the same pair — uniqueness is enforced at the application layer in lib/ingest.py._upsert_rels.",
+      "importance": 0.9,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "max_aggregation_on_update",
+      "label": "Max aggregation on update",
+      "type": "mechanism",
+      "description": "When the same node or edge is re-asserted by a new document, numeric fields are aggregated by MAX: importance = max(existing, new), confidence = max(existing, new). Rationale: a strong assertion from one document should not be diluted by a weaker mention elsewhere. Description is preserved (first non-empty wins) rather than overwritten, to avoid losing a rich first extraction.",
+      "importance": 0.85,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "nodes_never_deleted_by_ingest",
+      "label": "Nodes never deleted by ingest",
+      "type": "claim",
+      "description": "During re-ingestion of a doc_id, contributing edges may be deleted (if their sources becomes empty) but nodes are NEVER deleted automatically — their sources array is just trimmed. Rationale: other documents (or future ingests) may still reference the node; deleting it would invalidate those references. Only explicit `brain.py merge` removes a node.",
+      "importance": 0.85,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "idempotent_doc_re_ingest",
+      "label": "Idempotent doc re-ingest",
+      "type": "mechanism",
+      "description": "Re-ingesting an existing doc_id runs three phases: (1) purge — remove doc_id from every Rel.sources/Node.sources it appears in, deleting the rel if sources becomes empty; (2) upsert nodes — refresh labels, fill empty descriptions, max-merge importance and sources; (3) upsert rels — accumulate evidence, max-confidence. Net effect: a strict no-op when the payload is unchanged, and a clean swap when the document was edited. Avoids drift and duplicate edges.",
+      "importance": 0.95,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "slugify_silent_rewrite_pitfall",
+      "label": "Slugify silent rewrite pitfall",
+      "type": "claim",
+      "description": "Special characters in labels (parentheses, slashes, dots) become underscores during slugify. A label like 'Reliability sigmoid G(f,d)' becomes id `reliability_sigmoid_g_f_d`. Any subsequent rel that references the pre-rewrite id is silently SKIPPED (logged in skipped_rels). Rule for hand-authored payloads: use plain ASCII labels without parentheses, slashes, or dots, and verify with `brain find <label>` before authoring relations.",
+      "importance": 0.85,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "open_node_type_vocabulary",
+      "label": "Open node type vocabulary",
+      "type": "mechanism",
+      "description": "Node types are an OPEN vocabulary: any non-empty string is accepted at ingest. Unknown types are logged to extension_requests.jsonl for human review but the node is still created. Rationale: coherence comes from the lookup-before-create protocol (query_graph / brain find), not from type enforcement — if a similar node already exists, the new extraction reuses it, and the type follows from the existing node.",
+      "importance": 0.9,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "node_type_reference_list",
+      "label": "Node type reference list",
+      "type": "artifact",
+      "description": "The 11 reference node types: concept (abstract idea), entity (named thing), event (something that happens in time), claim (debatable assertion), mechanism (cause→effect process), algorithm (named computational procedure), property (measurable attribute), person (human actor), place (location), artifact (produced object), process (goal-directed sequence of steps). `algorithm` was added after 14 rejections observed during Phase 1 experimentation.",
+      "importance": 0.7,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "strict_rel_type_whitelist",
+      "label": "Strict rel type whitelist",
+      "type": "mechanism",
+      "description": "Relation types are a STRICT whitelist enforced at ingestion. Any type outside the whitelist is REJECTED (not just logged) and recorded in extension_requests.jsonl. Rationale: relations are the semantic core of the graph; if Claude invents `triggers` or `leads_to` instead of `causes`/`enables`, the causal traversals (`brain causes X`, `brain effects Y`) become unusable. The causal vocabulary must not drift.",
+      "importance": 1.0,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "causal_core_relations",
+      "label": "Causal core relations",
+      "type": "artifact",
+      "description": "The six causal-core relation types, preferred by the extraction protocol: `causes` (A produces B, factual or statistical), `prevents` (A blocks B), `requires` (B cannot exist without A), `enables` (A makes B possible without forcing it), `precedes` (A happens before B, temporal only), `contradicts` (A and B are logically incompatible).",
+      "importance": 0.9,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "structural_relations",
+      "label": "Structural relations",
+      "type": "artifact",
+      "description": "Five structural support relation types: `is_a` (kind of), `part_of` (component of), `instance_of` (concrete instance of), `similar_to` (resembles without being instance), `property_of` (attribute of). Auxiliary to the causal core — used when no causal interpretation exists.",
+      "importance": 0.6,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "related_to_fallback_relation",
+      "label": "related_to fallback relation",
+      "type": "artifact",
+      "description": "Single fallback relation type for unqualified links between concepts. Explicitly flagged as a sign of lazy extraction. Audit warns when its share of total edges exceeds 5%. If you cannot qualify HOW two things relate, the rule is to SKIP the edge rather than emit `related_to`.",
+      "importance": 0.5,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "self_loop_rejection",
+      "label": "Self-loop rejection",
+      "type": "mechanism",
+      "description": "Relations where src == dst are rejected during validation. Self-loops carry no causal information and degrade traversal.",
+      "importance": 0.4,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "confidence_calibration_table",
+      "label": "Confidence calibration table",
+      "type": "artifact",
+      "description": "Four-tier confidence calibration the LLM must apply when emitting relations. 1.0: explicitly stated with a direct causal verb in the source. 0.7–0.9: reasonable inference from the text. 0.4–0.6: plausible hypothesis not demonstrated by the text. <0.4: do NOT ingest — better to omit than to pollute. Audit reports avg-confidence-by-rel-type so drift is visible.",
+      "importance": 0.85,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "ingest_json_payload_format",
+      "label": "Ingest JSON payload format",
+      "type": "artifact",
+      "description": "Payload schema: { doc_id: str, nodes: [{id, label, type, description, importance}], rels: [{src, dst, type, confidence, evidence, factor?}] }. doc_id is the slug under which all contributions are tracked. Re-ingesting an existing doc_id purges previous contributions before re-applying — the schema therefore IS the update unit.",
+      "importance": 0.9,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "extraction_workflow",
+      "label": "Extraction workflow",
+      "type": "process",
+      "description": "Seven-step extraction protocol from SKILL.md: (1) read document in full; (2) build a section-inventory checklist from ## headings; (3) entity pass — extract every concept the document covers in depth, with comprehensive descriptions, marked decisions, rejected alternatives, named sub-components with distinct causal roles; (4) relation pass — prefer causal types, fill evidence with mechanism not label, calibrate confidence; (5) completeness + orphan review against the section checklist; (6) anti-duplicate check (`brain find` or `query_graph`); (7) gap verification — the most important step.",
+      "importance": 1.0,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "section_inventory_checklist",
+      "label": "Section inventory checklist",
+      "type": "mechanism",
+      "description": "Step 2 of the extraction workflow. Before any entity is extracted, list every ##-level heading of the source as a checklist. Each section becomes a coverage target; a section that produces zero nodes must be an explicit decision (skipped with a one-line reason), not an oversight. Catches the most common extraction failure: skimming late sections.",
+      "importance": 0.85,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "comprehensive_description_requirement",
+      "label": "Comprehensive description requirement",
+      "type": "claim",
+      "description": "A node's description must capture mechanism, context, variants, quantitative facts, and examples — enough that a reader of only the graph loses no useful information from the source. A vague one-liner is unacceptable. This is what makes `source_document_disposability` operational.",
+      "importance": 0.9,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "marked_decisions_extraction",
+      "label": "Marked decisions extraction",
+      "type": "claim",
+      "description": "Special case in entity pass: any item the document explicitly marks as decided/validated ([ACQUIRED], ✓, 'decided') MUST produce a node. These are the most reliable causal facts in the document — they are exactly what the graph is for. Skipping them is the extraction equivalent of dropping primary keys.",
+      "importance": 0.85,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "rejected_alternative_extraction",
+      "label": "Rejected alternative extraction",
+      "type": "claim",
+      "description": "When a document explains why an alternative was NOT chosen, extract it. Pattern: create a `claim` node for the rejected approach, link it with `contradicts` or `prevents` to the chosen approach, and put the rejection rationale in `evidence`. The reason for rejection is causal gold — it captures the why behind every design choice.",
+      "importance": 0.85,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "named_sub_component_extraction_rule",
+      "label": "Named sub-component extraction rule",
+      "type": "claim",
+      "description": "When a concept has N explicitly named sub-components, create individual nodes for each IF they have distinct cause/effect relationships to other concepts. If they are only parallel inputs to the same parent mechanism with no individual causal fingerprint, bundle them in the parent node's description instead. Prevents both fragmentation and lossy collapsing.",
+      "importance": 0.7,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "relation_pass_evidence_quality",
+      "label": "Relation pass evidence quality",
+      "type": "claim",
+      "description": "Step 4 of the workflow. Each relation's `evidence` must EXPLAIN WHY the relationship holds: mechanism, condition, reasoning. 'X causes Y because Z' is the target. A single vague word ('correlated', 'related') is unacceptable. Evidence is what lets a future reader audit the causal claim.",
+      "importance": 0.9,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "completeness_and_orphan_review",
+      "label": "Completeness and orphan review",
+      "type": "process",
+      "description": "Step 5 of the workflow. Coverage check: every section in the inventory should have ≥1 node, otherwise re-read and explicitly decide. Orphan check: any node with 0 relations after the relation pass is suspect — either add a meaningful relation or drop the node. A node with no edges contributes nothing to traversal.",
+      "importance": 0.8,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "anti_duplicate_check",
+      "label": "Anti-duplicate check",
+      "type": "process",
+      "description": "Step 6 of the workflow. Before creating a new node, look up whether an equivalent already exists: in agentic API mode via the `query_graph` tool (returns 1-hop neighborhood and matches); in interactive Claude Code mode via `brain find <label or fragment>`. When in doubt, REUSE — a merge via `brain.py merge` is cheaper than a fragmented graph.",
+      "importance": 0.9,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "gap_verification_step",
+      "label": "Gap verification step",
+      "type": "process",
+      "description": "Step 7 of the workflow — and the most important quality check. Cognitively DIFFERENT from extraction: you are no longer selecting, you are comparing. Procedure: retrieve every node from this doc_id, re-read the source with the node list visible, walk section by section asking 'is the core content of this section represented either as a dedicated node or clearly captured in an existing description?'. Catches SEMANTIC omissions (a mechanism spread across sections with no dedicated node, a decision whose rationale was lost) that the orphan/related_to audits cannot detect.",
+      "importance": 1.0,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "node_creation_threshold_rule",
+      "label": "Node creation threshold rule",
+      "type": "claim",
+      "description": "Create a node only if THIS document says enough about the concept to write a real description. A concept merely mentioned in passing (named but not explained) does NOT get a node — wait for a document that actually covers it. Prevents stub-only nodes that bloat the graph without adding traversable structure.",
+      "importance": 0.8,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "query_graph_tool_protocol",
+      "label": "query_graph tool protocol",
+      "type": "process",
+      "description": "Agentic-mode anti-duplicate protocol. For every concept Claude is about to materialize: call `query_graph(topic)` → read the returned neighborhood → if any returned node matches your candidate's semantics (modulo synonyms/plurals/abbreviations), REUSE its exact id; if not, create a new id. Do not blindly create edges to every neighbor shown — only add relations actually supported by the current document.",
+      "importance": 0.85,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "brain_find_interactive_protocol",
+      "label": "brain find interactive protocol",
+      "type": "process",
+      "description": "Interactive Claude-Code-mode anti-duplicate protocol. Run `./brain.py find <label or fragment>` before creating a node. If a close match exists, reuse its id; otherwise the ingest will at most log a potential-duplicate hint to potential_duplicates.jsonl and the user can merge later via `brain.py merge`.",
+      "importance": 0.7,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "query_question_to_command_mapping",
+      "label": "Query question to command mapping",
+      "type": "artifact",
+      "description": "Question-shape → CLI command map. 'Why X?' / 'What causes X?' → `brain causes X`. 'What does Y lead to?' / 'If Y then?' → `brain effects Y`. 'How does A relate to B?' → `brain paths A B`. 'Show me X' → `brain show X`. 'Find nodes about T' → `brain find T`. Advanced traversal → `brain query <cypher>`.",
+      "importance": 0.7,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "answer_must_cite_evidence",
+      "label": "Answer must cite evidence",
+      "type": "claim",
+      "description": "When constructing a natural-language reply from a graph traversal, Claude must CITE the `evidence` fields from the returned rows. A confident-sounding answer that does not surface its supporting evidence is forbidden — it would smuggle weak inferences past the audit trail.",
+      "importance": 0.7,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "flag_low_confidence_chain_rule",
+      "label": "Flag low-confidence chain rule",
+      "type": "claim",
+      "description": "If an answer chain rests on edges with confidence below ~0.6, Claude must flag this explicitly to the user. The graph's calibration scheme only works if downstream answers honor it.",
+      "importance": 0.6,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "invented_node_types_antipattern",
+      "label": "Invented node types antipattern",
+      "type": "claim",
+      "description": "Inventing node types like `idea`, `risk`, `feeling` instead of picking the closest reference type. Although the open-vocabulary policy ACCEPTS them, the practice fragments queries that filter by type. Pick a reference type or omit type.",
+      "importance": 0.5,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "invented_rel_types_antipattern",
+      "label": "Invented rel types antipattern",
+      "type": "claim",
+      "description": "Inventing relation types like `triggers`, `leads_to`, `influences` instead of mapping to `causes`/`enables`/`precedes`. Unlike nodes, these are REJECTED at ingest. The rejection is intentional: the causal vocabulary must not drift or `brain causes` / `brain effects` lose precision.",
+      "importance": 0.6,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "paragraph_description_antipattern",
+      "label": "Paragraph description antipattern",
+      "type": "claim",
+      "description": "Stuffing whole paragraphs into a node's `description`. One disambiguating sentence (plus the comprehensive mechanism summary) is enough; the structure carries the rest of the information via relations. Long descriptions defeat the assertion-over-paragraph principle.",
+      "importance": 0.5,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "redis_postmortem_worked_example",
+      "label": "Redis postmortem worked example",
+      "type": "artifact",
+      "description": "Reference extraction in SKILL.md and README. From the source: 'Redis TTL 5s vs request interval 30s caused cache miss storm, DB fallback raised p99 to 800ms.' Extracted as 5 nodes (ttl_5_seconds / request_interval_30s / cache_miss_storm / db_fallback / p99_latency_800ms) and 4 edges, mostly `causes` and one `enables`. Demonstrates the target granularity for hand-authored payloads.",
+      "importance": 0.6,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "examples_sample_json_reference_example",
+      "label": "examples sample json reference example",
+      "type": "artifact",
+      "description": "Shipped reference payload at examples/sample.json describing the causal anatomy of open-source project mortality (18 nodes, 26 relations). The recommended first-read for any extractor — it shows the granularity, tone, and density expected of a real payload.",
+      "importance": 0.55,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "extension_requests_jsonl_log",
+      "label": "extension_requests jsonl log",
+      "type": "artifact",
+      "description": "Append-only JSONL at project root collecting (a) rejected rel-type values, (b) rejected node payloads (missing label/type, unslugifiable label), (c) accepted but out-of-reference node types. Used to decide whether the whitelist should evolve. Git-ignored. The `algorithm` node type was added to the reference list after this log surfaced 14 rejections during Phase 1.",
+      "importance": 0.6,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "potential_duplicates_jsonl_log",
+      "label": "potential_duplicates jsonl log",
+      "type": "artifact",
+      "description": "Append-only JSONL recording substring overlaps between a new node's label and existing nodes' labels at ingest time. Up to 5 candidates per new node. The pipeline NEVER auto-merges — the user reviews this log and calls `brain.py merge SRC INTO DST` explicitly. Git-ignored.",
+      "importance": 0.55,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "tagging_convention_with_project_prefix",
+      "label": "Tagging convention with project prefix",
+      "type": "mechanism",
+      "description": "doc_id naming convention for project ingestions: `project_<name>_<aspect>` (e.g. project_monai_economy, project_brain_docs). Allows a single Cypher filter `WHERE any(s IN n.sources WHERE s STARTS WITH 'project_<name>_')` to retrieve all nodes belonging to a project. NOTE: CLAUDE.md and the ingest prompt also suggest adding a literal 'project:<name>' tag to every node/rel sources list, but lib/validate.NodePayload and RelPayload do NOT extract a `sources` field from the payload — only the top-level doc_id is propagated into Node.sources/Rel.sources. The 'project:<name>' tag is therefore aspirational; the doc_id prefix is what actually drives project-scoped queries.",
+      "importance": 0.7,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "kuzu_reserved_alias_pitfall",
+      "label": "Kuzu reserved alias pitfall",
+      "type": "claim",
+      "description": "Kuzu reserves SQL-like keywords (`desc`, `asc`, `limit`, `skip`) — they cannot be used as column aliases in raw Cypher passed to `brain query`. Use `descr`, `direction`, etc. instead. Surfaced as a project-level convention.",
+      "importance": 0.4,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "phase_0_cli_skeleton",
+      "label": "Phase 0 — CLI skeleton",
+      "type": "event",
+      "description": "First completed phase. Delivered: Kuzu + schema operational, brain.py CLI with init/ingest/find/show/causes/effects/paths/query/stats/audit/export/import/merge/context, SKILL.md, pytest coverage >90%. The CLI is the persistent low-level interface kept maintained through later phases.",
+      "importance": 0.6,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "phase_1_corpus_experimentation",
+      "label": "Phase 1 — Corpus experimentation",
+      "type": "event",
+      "description": "In-progress phase. Material: 50 Wikipedia AI articles + 3 GitHub READMEs. Compared Cycle A (no preflight) vs Cycle B (with heuristic preflight). Objective: quantify the gain of injecting existing graph context into the extraction prompt and identify where heuristic preflight breaks down. Output drove the decision to replace heuristic preflight by agentic tool calls in Phase 2, and to add `algorithm` to the reference node types.",
+      "importance": 0.7,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "phase_2_backend_api_tool_use",
+      "label": "Phase 2 — Backend API + tool use",
+      "type": "event",
+      "description": "Planned phase. FastAPI backend exposing the graph tools to Claude with streaming. Agentic extraction: replace heuristic preflight by per-concept tool calls (`query_graph`, `get_node`, `traverse`, `cypher`). Agentic interrogation: Claude loops until it has a complete answer. The CLI is maintained for low-level operations.",
+      "importance": 0.6,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "phase_3_react_frontend",
+      "label": "Phase 3 — React frontend",
+      "type": "event",
+      "description": "Planned phase. Three views: ingestion (live tool-call trace + ingestion result), interrogation (reasoning trace + answer), graph explorer (sub-graph visualization). Materializes the on-demand retrieval principle for human users.",
+      "importance": 0.55,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "phase_4_maturity",
+      "label": "Phase 4 — Maturity",
+      "type": "event",
+      "description": "Planned phase. Four work-streams: embedding-based fuzzy entity resolution (beyond substring match), temporal importance decay, automatic contradiction detection, export-diff for graph evolution versioning.",
+      "importance": 0.5,
+      "sources": ["project_brain_docs", "project:brain"]
+    },
+    {
+      "id": "frozen_decisions_list",
+      "label": "Frozen decisions list",
+      "type": "artifact",
+      "description": "VISION.md §11 — the set of decisions explicitly locked: edge dedup on (src, dst, type) with parallel evidences[]/sources[] and max confidence; idempotent doc re-ingest (purge then insert, nodes never deleted); canonical id = slugify(label); anti-duplicates by exact+substring lookup with manual merge; open node types, strict rel types; on-demand retrieval, never preemptive; English code/doc, French VISION.md; portable install (no hardcoded paths).",
+      "importance": 0.85,
+      "sources": ["project_brain_docs", "project:brain"]
+    }
+  ],
+  "rels": [
+    {"src": "brain_project", "dst": "causal_knowledge_graph", "type": "part_of", "confidence": 1.0, "evidence": "The causal knowledge graph is the central data structure that brAIn maintains; the rest (CLI, MCP, UI, hooks) exists to read and write into it.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "structure_over_text_storage", "dst": "source_document_disposability", "type": "enables", "confidence": 1.0, "evidence": "Once the causal structure is extracted, the source text adds no further retrievable value — so the document can be deleted without information loss.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "assertion_over_paragraph", "dst": "structure_over_text_storage", "type": "requires", "confidence": 0.95, "evidence": "Storing one assertion in place of a paragraph is what 'structure over text' operationally means.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "causality_first_principle", "dst": "strict_rel_type_whitelist", "type": "causes", "confidence": 0.95, "evidence": "Because causality is the value, the causal vocabulary must not drift; that justifies the strict whitelist on relation types.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "source_document_disposability", "dst": "comprehensive_description_requirement", "type": "requires", "confidence": 1.0, "evidence": "The source can only be discarded if the description captures mechanism, variants, examples, and quantitative facts — otherwise information is lost.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "traceability_by_default", "dst": "rel_table_columns", "type": "requires", "confidence": 0.9, "evidence": "Traceability is materialized by the parallel sources[]/evidences[] arrays in the Rel table schema.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "on_demand_retrieval", "dst": "working_vs_long_term_memory_split", "type": "requires", "confidence": 1.0, "evidence": "On-demand retrieval is only meaningful given the separation between Claude's context (working) and the graph (long-term).", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "on_demand_retrieval", "dst": "query_graph_tool_protocol", "type": "enables", "confidence": 0.9, "evidence": "The per-concept query_graph call IS the on-demand retrieval mechanism in agentic extraction.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "graph_is_the_asset_not_the_code", "dst": "brain_project", "type": "property_of", "confidence": 0.9, "evidence": "Stated as a founding conviction shaping the project's engineering priorities — invest in graph quality, keep code replaceable.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "domain_agnostic_installable_anywhere", "dst": "brain_project", "type": "property_of", "confidence": 0.9, "evidence": "Listed in the frozen decisions: brAIn must be runnable from any local folder with no absolute paths.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "not_a_note_taking_system", "dst": "structure_over_text_storage", "type": "contradicts", "confidence": 0.9, "evidence": "Note-taking systems store prose; brAIn stores extracted structure — they have incompatible storage models.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "not_a_textual_rag", "dst": "structure_over_text_storage", "type": "requires", "confidence": 0.85, "evidence": "Rejecting text-chunk storage is the same decision as preferring causal structure.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "not_claude_conversational_auto_memory", "dst": "brain_project", "type": "property_of", "confidence": 0.7, "evidence": "Negative scoping: brAIn handles domain knowledge; auto-memory handles user preferences.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "not_a_keyword_search_engine", "dst": "causality_first_principle", "type": "requires", "confidence": 0.7, "evidence": "Because the unit of value is causal traversal, the system does not prioritize keyword retrieval.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "kuzu_embedded_db_choice", "dst": "domain_agnostic_installable_anywhere", "type": "enables", "confidence": 0.9, "evidence": "Embedded Cypher DB with no server makes brAIn runnable in any directory without infrastructure.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "single_node_single_rel_table_schema", "dst": "open_node_type_vocabulary", "type": "enables", "confidence": 0.95, "evidence": "Type-as-property (not type-as-table) lets new node types appear without schema migration.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "node_table_columns", "dst": "single_node_single_rel_table_schema", "type": "part_of", "confidence": 1.0, "evidence": "The Node DDL implements the single-table schema decision.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "rel_table_columns", "dst": "single_node_single_rel_table_schema", "type": "part_of", "confidence": 1.0, "evidence": "The Rel DDL implements the single-table schema decision.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "slugified_id_rule", "dst": "idempotent_doc_re_ingest", "type": "enables", "confidence": 0.9, "evidence": "Stable canonical ids derived from labels allow the purge-then-insert cycle to find previous contributions reliably across re-extractions.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "edge_dedup_on_src_dst_type_triple", "dst": "rel_table_columns", "type": "requires", "confidence": 0.95, "evidence": "The parallel evidences[]/sources[] arrays in the Rel schema are exactly what dedup accumulates into.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "max_aggregation_on_update", "dst": "edge_dedup_on_src_dst_type_triple", "type": "part_of", "confidence": 0.9, "evidence": "Max-aggregation is the rule applied at the moment of deduplication when a duplicate triple is asserted.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "nodes_never_deleted_by_ingest", "dst": "idempotent_doc_re_ingest", "type": "part_of", "confidence": 0.95, "evidence": "The 'never delete nodes' rule is one of the safety guarantees of the purge phase.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "slugify_silent_rewrite_pitfall", "dst": "slugified_id_rule", "type": "property_of", "confidence": 0.85, "evidence": "The pitfall is a consequence of the canonicalization rule: special characters collapse to underscores, so labels with parentheses or dots produce surprising ids.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "open_node_type_vocabulary", "dst": "anti_duplicate_check", "type": "requires", "confidence": 0.85, "evidence": "Coherence under open types must come from lookup-before-create; without anti-duplicate checks the open vocabulary would fragment.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "strict_rel_type_whitelist", "dst": "causal_core_relations", "type": "part_of", "confidence": 1.0, "evidence": "Causal core types are the central subset of the whitelist.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "strict_rel_type_whitelist", "dst": "structural_relations", "type": "part_of", "confidence": 1.0, "evidence": "Structural relations are the auxiliary subset of the whitelist.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "strict_rel_type_whitelist", "dst": "related_to_fallback_relation", "type": "part_of", "confidence": 1.0, "evidence": "related_to is the fallback subset, with an audit ceiling.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "invented_rel_types_antipattern", "dst": "strict_rel_type_whitelist", "type": "contradicts", "confidence": 0.95, "evidence": "Inventing rel types is exactly what the strict whitelist forbids — they are rejected at ingest.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "invented_node_types_antipattern", "dst": "open_node_type_vocabulary", "type": "contradicts", "confidence": 0.7, "evidence": "Inventing types is technically allowed by the open vocabulary but contradicts the spirit of reuse, hence flagged as antipattern.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "paragraph_description_antipattern", "dst": "assertion_over_paragraph", "type": "contradicts", "confidence": 0.9, "evidence": "Long prose in description defeats the asssertion-over-paragraph principle that justified the schema.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "extraction_workflow", "dst": "section_inventory_checklist", "type": "part_of", "confidence": 1.0, "evidence": "Step 2 of the seven-step workflow.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "extraction_workflow", "dst": "completeness_and_orphan_review", "type": "part_of", "confidence": 1.0, "evidence": "Step 5 of the seven-step workflow.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "extraction_workflow", "dst": "anti_duplicate_check", "type": "part_of", "confidence": 1.0, "evidence": "Step 6 of the seven-step workflow.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "extraction_workflow", "dst": "gap_verification_step", "type": "part_of", "confidence": 1.0, "evidence": "Step 7 of the seven-step workflow.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "section_inventory_checklist", "dst": "gap_verification_step", "type": "enables", "confidence": 0.85, "evidence": "The section inventory is the comparison baseline that makes gap verification possible.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "comprehensive_description_requirement", "dst": "extraction_workflow", "type": "property_of", "confidence": 0.8, "evidence": "Stated under the entity-pass step as a hard requirement.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "marked_decisions_extraction", "dst": "extraction_workflow", "type": "part_of", "confidence": 0.8, "evidence": "Special case explicitly carved out in the workflow under 'three special cases that must never be missed'.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "rejected_alternative_extraction", "dst": "extraction_workflow", "type": "part_of", "confidence": 0.8, "evidence": "Special case 2 explicitly carved out in the workflow.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "named_sub_component_extraction_rule", "dst": "extraction_workflow", "type": "part_of", "confidence": 0.8, "evidence": "Special case 3 explicitly carved out in the workflow.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "relation_pass_evidence_quality", "dst": "extraction_workflow", "type": "part_of", "confidence": 0.9, "evidence": "Step 4 of the workflow demands rich evidence per relation.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "anti_duplicate_check", "dst": "query_graph_tool_protocol", "type": "instance_of", "confidence": 0.85, "evidence": "query_graph is the agentic-mode realization of the anti-duplicate step.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "anti_duplicate_check", "dst": "brain_find_interactive_protocol", "type": "instance_of", "confidence": 0.85, "evidence": "brain find is the interactive-mode realization of the anti-duplicate step.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "node_creation_threshold_rule", "dst": "extraction_workflow", "type": "part_of", "confidence": 0.75, "evidence": "Codified inside the entity-pass step to prevent stub-only nodes.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "gap_verification_step", "dst": "completeness_and_orphan_review", "type": "contradicts", "confidence": 0.5, "evidence": "Step 6 detects structural problems (orphans, related_to ratio); step 7 detects semantic omissions — they are intentionally separate quality checks, not redundant.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "confidence_calibration_table", "dst": "flag_low_confidence_chain_rule", "type": "requires", "confidence": 0.8, "evidence": "The calibration scale is the basis on which low-confidence chains are flagged in answers.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "answer_must_cite_evidence", "dst": "traceability_by_default", "type": "requires", "confidence": 0.85, "evidence": "Answers can cite evidence only because every edge carries one; the principle and the practice are linked.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "related_to_fallback_relation", "dst": "relation_pass_evidence_quality", "type": "contradicts", "confidence": 0.7, "evidence": "Using related_to is the symptom of skipping the 'explain WHY this edge holds' discipline.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "tagging_convention_with_project_prefix", "dst": "brain_project", "type": "enables", "confidence": 0.7, "evidence": "Project tags allow mono-domain queries inside a multi-project graph.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "extension_requests_jsonl_log", "dst": "open_node_type_vocabulary", "type": "enables", "confidence": 0.8, "evidence": "By recording out-of-reference types, the log surfaces evidence for evolving the reference list (algorithm was added this way).", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "potential_duplicates_jsonl_log", "dst": "anti_duplicate_check", "type": "enables", "confidence": 0.8, "evidence": "Substring overlaps that the LLM missed at extraction are still surfaced post-ingest for a user-driven merge.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "kuzu_reserved_alias_pitfall", "dst": "kuzu_embedded_db_choice", "type": "property_of", "confidence": 0.6, "evidence": "Direct consequence of choosing Kuzu; its SQL-style reserved words leak into the Cypher dialect.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "phase_0_cli_skeleton", "dst": "phase_1_corpus_experimentation", "type": "precedes", "confidence": 1.0, "evidence": "Roadmap order: CLI must exist before any corpus can be ingested.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "phase_1_corpus_experimentation", "dst": "phase_2_backend_api_tool_use", "type": "precedes", "confidence": 0.95, "evidence": "Roadmap order: empirical evidence on preflight informed the design of the agentic backend.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "phase_2_backend_api_tool_use", "dst": "phase_3_react_frontend", "type": "precedes", "confidence": 0.9, "evidence": "Roadmap order: the React frontend visualizes traces that the backend produces.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "phase_3_react_frontend", "dst": "phase_4_maturity", "type": "precedes", "confidence": 0.8, "evidence": "Roadmap order: maturity items are deferred until the frontend ships.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "phase_1_corpus_experimentation", "dst": "node_type_reference_list", "type": "causes", "confidence": 0.9, "evidence": "The reference list was updated to add `algorithm` after Phase 1 logged 14 rejections.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "phase_2_backend_api_tool_use", "dst": "query_graph_tool_protocol", "type": "enables", "confidence": 0.85, "evidence": "Phase 2 ships the tool-use plumbing that makes the protocol executable from Claude.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "frozen_decisions_list", "dst": "edge_dedup_on_src_dst_type_triple", "type": "part_of", "confidence": 1.0, "evidence": "Edge dedup with parallel arrays is item 1 of the frozen-decisions list.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "frozen_decisions_list", "dst": "idempotent_doc_re_ingest", "type": "part_of", "confidence": 1.0, "evidence": "Re-ingestion semantics are explicitly frozen.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "frozen_decisions_list", "dst": "slugified_id_rule", "type": "part_of", "confidence": 1.0, "evidence": "id = slugify(label) is explicitly frozen.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "frozen_decisions_list", "dst": "open_node_type_vocabulary", "type": "part_of", "confidence": 1.0, "evidence": "Open node types is explicitly listed in the frozen decisions.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "frozen_decisions_list", "dst": "strict_rel_type_whitelist", "type": "part_of", "confidence": 1.0, "evidence": "Strict rel types is explicitly listed in the frozen decisions.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "frozen_decisions_list", "dst": "on_demand_retrieval", "type": "part_of", "confidence": 1.0, "evidence": "On-demand retrieval is explicitly listed in the frozen decisions.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "frozen_decisions_list", "dst": "domain_agnostic_installable_anywhere", "type": "part_of", "confidence": 1.0, "evidence": "No-hardcoded-paths portability is explicitly listed in the frozen decisions.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "self_loop_rejection", "dst": "strict_rel_type_whitelist", "type": "part_of", "confidence": 0.5, "evidence": "Self-loop rejection is enforced alongside the type whitelist in the validation pass.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "redis_postmortem_worked_example", "dst": "extraction_workflow", "type": "instance_of", "confidence": 0.85, "evidence": "Concrete example of the seven-step workflow's output for a small input.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "examples_sample_json_reference_example", "dst": "extraction_workflow", "type": "instance_of", "confidence": 0.85, "evidence": "Reference payload demonstrating the expected granularity for a real document.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "ingest_json_payload_format", "dst": "rel_table_columns", "type": "requires", "confidence": 0.85, "evidence": "Payload fields map directly to the Rel and Node table columns at upsert time.", "sources": ["project_brain_docs", "project:brain"]},
+    {"src": "query_question_to_command_mapping", "dst": "causality_first_principle", "type": "requires", "confidence": 0.7, "evidence": "The why/then/how question shapes exist because causal traversal is the central operation.", "sources": ["project_brain_docs", "project:brain"]}
+  ]
+}

@@ -1,34 +1,35 @@
 # brAIn
 
-**A causal knowledge graph built for [Claude](https://claude.ai/code) : store structure, not text.**
+**A causal knowledge graph built for [Claude](https://claude.ai/code): store structure, not text.**
 
-brAIn is a persistent external memory for Claude. Instead of re-reading documents every session, Claude extracts their causal structure once and stores it as a graph of atomic claims linked by typed edges (`causes`, `prevents`, `requires`, `enables`). Future sessions query the graph directly, with no re-reading, no re-summarizing, no lost context.
+brAIn is a persistent external memory for Claude. Instead of re-reading documents every session, Claude extracts their causal structure once and stores it as a graph of atomic claims linked by typed edges (`causes`, `prevents`, `requires`, `enables`). Future sessions query the graph directly — no re-reading, no re-summarizing, no lost context.
 
-It is designed to be used with [Claude Code](https://claude.ai/code) as a skill or MCP server. Claude performs all semantic extraction; `brain.py` handles persistence, deduplication, and queries.
+**brAIn contains zero LLM calls inside `lib/`.** There are no AI libraries or NLP parsers. The intelligence lives entirely in Claude. `brain.py` is pure plumbing: validation, deduplication, Cypher queries, persistence.
+
+The graph is the asset. The code is replaceable.
+
+| Approach | What's stored | What's retrieved |
+|---|---|---|
+| RAG / vector DB | Chunks of source text | Paragraphs that match the query |
+| brAIn | Causal structure extracted from text | Nodes + typed evidence chains |
 
 ![brAIn graph explorer](docs/screenshot_graph.png)
 
 ## How it works
 
-You point Claude at a document. Claude reads it, extracts nodes and causal relations, and emits a structured JSON payload. `brain.py` ingests it into a local [Kuzu](https://kuzudb.com) graph database. In any future session, Claude can query the graph to answer *why*, *what if*, and *how does A lead to B*, without ever touching the original document again.
+You point Claude at a document. Claude reads it, extracts nodes and causal relations, and emits a structured JSON payload. `brain.py` ingests it into a local [Kuzu](https://kuzudb.com) graph database. In any future session, Claude calls one of the 8 MCP tools to fetch only the neighborhood of the concept it needs — never the whole graph.
 
-| Approach | What's stored | What's retrieved |
-|---|---|---|
-| RAG / vector DB | Chunks of source text | Paragraphs that match the query |
-| brAIn | Causal structure extracted from text | Nodes + evidence chains |
-
-**brAIn contains zero LLM calls.** There are no AI libraries, no NLP parsers, nothing inside `lib/`. The intelligence lives entirely in Claude. `brain.py` is pure plumbing: validation, deduplication, Cypher queries, persistence.
-
-The graph is the asset. The code is replaceable.
+**Design invariant:** after a complete ingestion, you should be able to delete the source document and keep reasoning. If you cannot, the extraction was incomplete. This is the correctness criterion for extraction quality.
 
 ## Features
 
-- **Claude Code integration**: skill manifest (`docs/SKILL.md`) and MCP server (`mcp_server.py`) with 8 graph tools available in every session
-- **CLI** (`brain.py`): init, ingest, find, show, causes, effects, paths, query, stats, audit, export, import, merge
-- **React UI**: interactive graph explorer, search + type filters, node detail panel, one-click project ingestion via a dedicated Claude session
+- **Claude Code integration**: MCP server (`mcp_server.py`) with 8 graph tools available in every session; skill manifest (`docs/SKILL.md`) for full extraction protocol
+- **CLI** (`brain.py`): `init`, `ingest`, `find`, `show`, `causes`, `effects`, `paths`, `query`, `stats`, `audit`, `export`, `import`, `merge`, `context`
+- **React UI**: interactive graph explorer, search + type filters, node detail panel, autonomous project ingestion via a dedicated Claude session
 - **Kuzu embedded graph DB**: Cypher queries, no server, no cloud, local storage in `graph/kuzu_db/`
-- **Idempotent re-ingestion**: re-running `ingest` on an existing `doc_id` replaces its contributions cleanly without touching other documents' edges
-- **Typed vocabulary**: strict relation whitelist, open node types
+- **Idempotent re-ingestion**: re-running `ingest` on an existing `doc_id` purges and replaces its contributions cleanly; nodes are never deleted
+- **Typed vocabulary**: strict relation whitelist (12 types), open node types (any string accepted)
+- **Claude Code hooks**: PostToolUse + Stop hooks enforce graph updates after file edits in the same session
 
 ## Quick start
 
@@ -48,7 +49,7 @@ python3 -m venv .venv
 .venv/bin/python brain.py paths bus_factor_of_one project_death
 ```
 
-**Optional: global `brain` command.** Instead of `.venv/bin/python brain.py` every time:
+**Optional: global `brain` command.**
 
 ```bash
 cat > ~/.local/bin/brain << 'EOF'
@@ -69,7 +70,7 @@ brain effects cache_miss_storm
 Registers 8 graph tools in **every** Claude Code session, regardless of working directory.
 
 ```bash
-realpath .   # run from inside the brAIn directory to get the absolute path
+realpath .   # run from inside the brAIn directory
 ```
 
 Add to `~/.claude/settings.json`:
@@ -87,6 +88,8 @@ Add to `~/.claude/settings.json`:
 
 Available tools: `brain_find`, `brain_show`, `brain_causes`, `brain_effects`, `brain_paths`, `brain_query`, `brain_stats`, `brain_ingest`.
 
+**On-demand retrieval**: Claude never loads the whole graph into context. It fetches only the 1-hop neighborhood of the concept it is currently processing.
+
 ### As a skill
 
 Add to `.claude/CLAUDE.md` in any project:
@@ -95,38 +98,56 @@ Add to `.claude/CLAUDE.md` in any project:
 @/absolute/path/to/brAIn/docs/SKILL.md
 ```
 
-Claude will follow the full extraction protocol: section inventory → entity pass → relation pass → completeness review → gap verification.
+Claude follows a 7-step extraction protocol: section inventory → entity pass (including marked decisions, rejected alternatives, and named sub-components) → relation pass → anti-duplicate check → completeness review → emit payload → gap verification.
+
+### Claude Code hooks (enforce graph sync)
+
+Three hooks keep the graph in sync with active development:
+
+```bash
+# brain_session_start.sh  — SessionStart: timestamps session, clears tmp state
+# brain_hook.sh           — PostToolUse on Edit/Write: logs modified files,
+#                           injects graph-update reminder into Claude's context
+# brain_stop_check.py     — Stop: blocks if files were modified but no graph
+#                           update detected; escape hatch allows exit on 2nd attempt
+```
+
+The Stop hook queries `MATCH (n:Node) WHERE n.updated_at >= $session_start` — if any node was updated, the session is considered graph-synced and the hook allows termination.
 
 ## React UI
 
 ```bash
 # Backend (from the brAIn root)
 .venv/bin/pip install fastapi "uvicorn[standard]"
-.venv/bin/python ui/backend/main.py      # → http://localhost:8000
+uvicorn ui.backend.main:app --port 8000
 
 # Frontend (separate terminal)
 cd ui/frontend
 npm install
-npm run dev                              # → http://localhost:5173
+npm run dev     # → http://localhost:5173
 ```
 
-The UI includes an **Ingest panel**: enter a project name and folder path, and the backend spawns a dedicated Claude session that autonomously reads, extracts, and ingests the project's markdown files.
+The UI is a three-column layout: search/filter/node-list sidebar (left), force-directed graph canvas (center, d3-force layout), node detail panel (right).
+
+**Default view**: the canvas opens with only the highest-importance node visible. Double-clicking any node reveals its 1-hop neighbors. Search and type-filters override this and show their full result set.
+
+**Ingest panel**: enter a project name and folder path; the backend spawns a dedicated Claude session that autonomously reads, extracts, and ingests the project. Coverage includes all file types: `*.md`, `*.py`, `*.jsx`, `*.tsx`, `*.js`, `*.sh`. For code files, the protocol extracts architectural decisions — why a module exists, what it prevents or enables, rejected alternatives — not line-by-line logic. The ingestion job streams output in real time; the frontend polls every 2 seconds.
 
 ![brAIn ingest panel](docs/screenshot_ingest.png)
 
 ## CLI reference
 
 ```
-brain.py init                    Create the database and schema (idempotent)
-brain.py ingest <file.json>      Ingest a payload; safe to re-run
+brain.py init                    Create database and schema (idempotent)
+brain.py ingest <file.json>      Ingest payload; safe to re-run on same doc_id
 brain.py find <pattern>          Search nodes by label or id substring
-brain.py show <node_id>          Print a node + its incoming/outgoing edges
-brain.py causes <node>           Walk upstream causal chain
+brain.py show <node_id>          Print node + incoming/outgoing edges with evidence
+brain.py causes <node>           Walk upstream causal chain (causes/requires/enables/precedes)
 brain.py effects <node>          Walk downstream causal chain
-brain.py paths <src> <dst>       Find paths up to 4 hops between two nodes
+brain.py paths <src> <dst>       Find all paths up to 4 hops between two nodes
 brain.py query "<cypher>"        Run raw Cypher
 brain.py stats                   Node/relation counts by type
-brain.py audit                   Health report (orphans, related_to ratio, top-degree nodes)
+brain.py audit                   Health report: orphan ratio, related_to ratio, avg confidence, top-degree nodes
 brain.py export <file>           Dump full graph to JSON
 brain.py import <file>           Load a dump (--strategy force | merge)
 brain.py merge SRC INTO DST      Merge node SRC into DST; SRC is deleted
@@ -165,7 +186,9 @@ brain.py context <topic>         Get node + neighborhood for a topic (used by MC
 }
 ```
 
-**ID rules:** `id` is canonicalized to `slugify(label)`: lowercase, non-alphanumeric → `_`. Avoid parentheses, slashes, and dots in labels to prevent silent ID rewrites that break relation lookups.
+**ID rules:** `id` is canonicalized to `slugify(label)` — lowercase, non-alphanumeric → `_`, max 80 chars. Avoid parentheses, slashes, and dots in labels: `"Reliability sigmoid G(f,d)"` becomes `reliability_sigmoid_g_f_d`, and any relation referencing the pre-rewrite id is **silently skipped**. After ingestion, run `brain find <label>` to confirm the actual id.
+
+**Re-ingestion semantics:** re-ingesting an existing `doc_id` first purges all its contributions (removes from edge sources/evidences, deletes edge if sources becomes empty), then inserts the new payload. Nodes are never deleted.
 
 **Confidence calibration:**
 
@@ -174,15 +197,17 @@ brain.py context <topic>         Get node + neighborhood for a topic (used by MC
 | `1.0` | Explicitly stated with a direct causal verb |
 | `0.7–0.9` | Reasonable inference from the text |
 | `0.4–0.6` | Plausible hypothesis, not demonstrated |
-| `< 0.4` | Don't ingest, omit rather than pollute |
+| `< 0.4` | Do not ingest — omit rather than pollute |
 
 ## Vocabulary
 
 ### Relation types (strict whitelist)
 
+Any type outside this list is **rejected** at ingestion and logged to `extension_requests.jsonl`.
+
 | Type | Meaning |
 |---|---|
-| `causes` | A produces B |
+| `causes` | A produces B (factual or statistical) |
 | `prevents` | A blocks B |
 | `requires` | B cannot exist without A |
 | `enables` | A makes B possible without forcing it |
@@ -193,9 +218,7 @@ brain.py context <topic>         Get node + neighborhood for a topic (used by MC
 | `instance_of` | A is a concrete instance of B |
 | `similar_to` | A resembles B without being an instance |
 | `property_of` | A is a property of B |
-| `related_to` | Unqualified link, avoid keeping above 5% of edges |
-
-Any type outside this list is rejected at ingestion and logged to `extension_requests.jsonl`.
+| `related_to` | Unqualified link — avoid, keep below 5% of edges |
 
 ### Node types (open vocabulary)
 
@@ -203,12 +226,12 @@ Any non-empty string is accepted. Unknown types are logged to `extension_request
 
 ## Design principles
 
-1. **The graph is the asset, not the code.** The code stays simple and replaceable; the graph compounds in value over time.
-2. **One assertion beats one paragraph.** `ttl_too_short –causes→ cache_miss_storm` with a one-sentence `evidence` is more useful than three paragraphs to re-read.
-3. **Causality first.** Taxonomic relations (`is_a`, `part_of`) are support structure. The core is `causes / prevents / requires / enables`.
-4. **Source documents are disposable.** If extraction was correct, you should be able to delete the source and keep reasoning. If you can't, the extraction was incomplete.
-5. **Traceability by default.** Every node and edge carries `sources` (origin doc_ids) and `evidence` (the reasoning). You can always trace why something is in the graph.
-6. **On-demand retrieval, not preemptive injection.** Claude never loads the whole graph into context. It fetches only what it needs, when it needs it, via tool calls.
+1. **The graph is the asset, not the code.** Engineering investment is biased toward graph quality; the code stays simple and replaceable.
+2. **One assertion beats one paragraph.** `ttl_too_short –causes→ cache_miss_storm` with a one-sentence `evidence` is more useful than three paragraphs to re-read every session.
+3. **Causality first.** Taxonomic relations (`is_a`, `part_of`) are support structure. The semantic core is `causes / prevents / requires / enables`.
+4. **Source documents are disposable.** After correct extraction, you should be able to delete the source and keep reasoning. If you can't, the extraction was incomplete.
+5. **Traceability by default.** Every node and edge carries `sources` (origin doc_ids) and `evidence` (the reasoning). `evidences[i]` is parallel to `sources[i]`.
+6. **On-demand retrieval, not preemptive injection.** Claude never loads the whole graph. It fetches only the 1-hop neighborhood of the concept it needs, via tool calls.
 
 ## Testing
 
@@ -222,19 +245,22 @@ Any non-empty string is accepted. Unknown types are logged to `extension_request
 
 ```
 brAIn/
-├── brain.py              # CLI entrypoint
-├── mcp_server.py         # MCP server for Claude Code integration
-├── lib/                  # Core modules (db, ingest, query, audit)
+├── brain.py              # CLI entrypoint (pure plumbing, no semantic logic)
+├── mcp_server.py         # MCP server — 8 graph tools for Claude Code
+├── brain_hook.sh         # PostToolUse hook (graph-sync enforcement)
+├── brain_session_start.sh# SessionStart hook
+├── brain_stop_check.py   # Stop hook (blocks exit if graph not updated)
+├── lib/                  # Core modules: db, validate, ingest, query, audit, slugify
 ├── docs/
-│   ├── SKILL.md          # Claude extraction protocol
+│   ├── SKILL.md          # Claude extraction protocol (7 steps)
 │   └── SCHEMA.md         # Graph schema reference
 ├── ui/
-│   ├── backend/          # FastAPI backend
-│   └── frontend/         # React + Vite frontend
+│   ├── backend/          # FastAPI backend (port 8000)
+│   └── frontend/         # React + Vite (port 5173)
 ├── examples/
-│   └── sample.json       # Worked example (open-source project mortality)
-├── projects/             # Extracted project payloads
-└── experiments/          # Research scripts (corpus download, extraction comparison)
+│   └── sample.json       # Worked example: open-source project mortality
+├── projects/             # Extracted project payloads (by project name)
+└── experiments/          # Research scripts: corpus download, extraction comparison
 ```
 
 ## License
