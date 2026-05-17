@@ -1,0 +1,159 @@
+{
+  "doc_id": "how_oss_projects_die",
+  "nodes": [
+    {
+      "id": "bus_factor_of_one",
+      "label": "Bus factor of one",
+      "type": "claim",
+      "description": "The project depends entirely on a single maintainer with no co-maintainer of equal authority.",
+      "importance": 0.9
+    },
+    {
+      "id": "maintainer_burnout",
+      "label": "Maintainer burnout",
+      "type": "event",
+      "description": "Chronic exhaustion of the maintainer leading to disengagement.",
+      "importance": 0.9
+    },
+    {
+      "id": "missing_onboarding_doc",
+      "label": "Missing onboarding doc",
+      "type": "artifact",
+      "description": "No CONTRIBUTING file, no setup guide, no architecture overview for newcomers.",
+      "importance": 0.7
+    },
+    {
+      "id": "hard_to_build_codebase",
+      "label": "Hard-to-build codebase",
+      "type": "claim",
+      "description": "First-time contributors cannot get the project running locally in under an hour.",
+      "importance": 0.8
+    },
+    {
+      "id": "toxic_review_culture",
+      "label": "Toxic review culture",
+      "type": "claim",
+      "description": "Pull requests receive harsh or dismissive feedback that discourages future contributions.",
+      "importance": 0.8
+    },
+    {
+      "id": "slow_pr_reviews",
+      "label": "Slow PR reviews",
+      "type": "event",
+      "description": "Median time from PR open to first review exceeds two weeks.",
+      "importance": 0.7
+    },
+    {
+      "id": "few_active_contributors",
+      "label": "Few active contributors",
+      "type": "claim",
+      "description": "Fewer than three contributors submitting changes over a 90-day window.",
+      "importance": 0.8
+    },
+    {
+      "id": "discouraged_contributors",
+      "label": "Discouraged contributors",
+      "type": "event",
+      "description": "Contributors stop opening new pull requests after negative or absent interactions.",
+      "importance": 0.7
+    },
+    {
+      "id": "stale_issue_tracker",
+      "label": "Stale issue tracker",
+      "type": "artifact",
+      "description": "Issues remain open for months without triage or response.",
+      "importance": 0.6
+    },
+    {
+      "id": "users_lose_trust",
+      "label": "Users lose trust",
+      "type": "event",
+      "description": "Downstream users perceive the project as unreliable and search for alternatives.",
+      "importance": 0.8
+    },
+    {
+      "id": "fork_competes",
+      "label": "Fork competes",
+      "type": "event",
+      "description": "A community fork attracts the active contributor pool away from the original repo.",
+      "importance": 0.6
+    },
+    {
+      "id": "no_release_in_year",
+      "label": "No release in year",
+      "type": "event",
+      "description": "The project has not shipped a new version for more than twelve months.",
+      "importance": 0.7
+    },
+    {
+      "id": "security_patches_lag",
+      "label": "Security patches lag",
+      "type": "event",
+      "description": "Known vulnerabilities are not patched for weeks or months.",
+      "importance": 0.8
+    },
+    {
+      "id": "project_death",
+      "label": "Project death",
+      "type": "event",
+      "description": "The project is abandoned: no commits, no responses, no users.",
+      "importance": 1.0
+    },
+    {
+      "id": "ci_pipeline",
+      "label": "CI pipeline",
+      "type": "artifact",
+      "description": "Automated test and build pipeline triggered on each pull request.",
+      "importance": 0.6
+    },
+    {
+      "id": "broken_ci",
+      "label": "Broken CI",
+      "type": "event",
+      "description": "CI is red on main branch for an extended period.",
+      "importance": 0.7
+    },
+    {
+      "id": "governance_model",
+      "label": "Governance model",
+      "type": "artifact",
+      "description": "Documented decision-making process and roles for maintainers and contributors.",
+      "importance": 0.7
+    },
+    {
+      "id": "succession_plan",
+      "label": "Succession plan",
+      "type": "process",
+      "description": "Process for transferring maintainership when the current lead steps away.",
+      "importance": 0.6
+    }
+  ],
+  "rels": [
+    {"src": "bus_factor_of_one", "dst": "maintainer_burnout", "type": "causes", "confidence": 0.9, "evidence": "When only one person carries the load, fatigue accumulates without relief."},
+    {"src": "missing_onboarding_doc", "dst": "hard_to_build_codebase", "type": "causes", "confidence": 0.85, "evidence": "Without setup guides, newcomers struggle to reach a working environment."},
+    {"src": "hard_to_build_codebase", "dst": "few_active_contributors", "type": "causes", "confidence": 0.8, "evidence": "Contributors give up before submitting their first PR if the bar to entry is high."},
+    {"src": "toxic_review_culture", "dst": "discouraged_contributors", "type": "causes", "confidence": 0.95, "evidence": "Harsh feedback drives away contributors directly."},
+    {"src": "toxic_review_culture", "dst": "few_active_contributors", "type": "causes", "confidence": 0.85, "evidence": "Word spreads and prospective contributors avoid the project."},
+    {"src": "slow_pr_reviews", "dst": "discouraged_contributors", "type": "causes", "confidence": 0.8, "evidence": "Long waits make contributors feel their work is unwanted."},
+    {"src": "few_active_contributors", "dst": "slow_pr_reviews", "type": "causes", "confidence": 0.85, "evidence": "With fewer reviewers, queues stretch out."},
+    {"src": "discouraged_contributors", "dst": "few_active_contributors", "type": "causes", "confidence": 0.9, "evidence": "Discouragement directly translates to attrition."},
+    {"src": "discouraged_contributors", "dst": "maintainer_burnout", "type": "causes", "confidence": 0.7, "evidence": "When the contributor base shrinks, the maintainer absorbs more of the workload."},
+    {"src": "broken_ci", "dst": "discouraged_contributors", "type": "causes", "confidence": 0.7, "evidence": "Contributors lose confidence in their changes when the test suite is broken."},
+    {"src": "maintainer_burnout", "dst": "slow_pr_reviews", "type": "causes", "confidence": 0.85, "evidence": "A disengaged maintainer reviews less, and slower."},
+    {"src": "maintainer_burnout", "dst": "stale_issue_tracker", "type": "causes", "confidence": 0.8, "evidence": "Triage is one of the first activities to drop when burnout sets in."},
+    {"src": "stale_issue_tracker", "dst": "users_lose_trust", "type": "causes", "confidence": 0.75, "evidence": "Unanswered issues read as a project that no longer cares."},
+    {"src": "no_release_in_year", "dst": "users_lose_trust", "type": "causes", "confidence": 0.85, "evidence": "Users equate a long release gap with project abandonment."},
+    {"src": "security_patches_lag", "dst": "users_lose_trust", "type": "causes", "confidence": 0.9, "evidence": "Unpatched CVEs force downstream users to plan migrations."},
+    {"src": "maintainer_burnout", "dst": "no_release_in_year", "type": "causes", "confidence": 0.8, "evidence": "Cutting a release requires sustained focus the burnt-out maintainer cannot provide."},
+    {"src": "maintainer_burnout", "dst": "security_patches_lag", "type": "causes", "confidence": 0.8, "evidence": "Triaging and patching CVEs require energy that burnout depletes first."},
+    {"src": "users_lose_trust", "dst": "fork_competes", "type": "causes", "confidence": 0.7, "evidence": "Once trust erodes, a fork becomes both attractive and feasible."},
+    {"src": "fork_competes", "dst": "project_death", "type": "causes", "confidence": 0.85, "evidence": "A successful fork drains the remaining contributor and user community."},
+    {"src": "maintainer_burnout", "dst": "project_death", "type": "causes", "confidence": 0.8, "evidence": "Without the keystone maintainer, the project collapses."},
+    {"src": "governance_model", "dst": "succession_plan", "type": "enables", "confidence": 0.9, "evidence": "Documented governance is a prerequisite for an orderly handover."},
+    {"src": "succession_plan", "dst": "project_death", "type": "prevents", "confidence": 0.85, "evidence": "A succession plan allows the project to survive the loss of its original maintainer."},
+    {"src": "governance_model", "dst": "toxic_review_culture", "type": "prevents", "confidence": 0.6, "evidence": "Explicit norms can curb harsh reviewing behavior."},
+    {"src": "ci_pipeline", "dst": "broken_ci", "type": "requires", "confidence": 1.0, "evidence": "Broken CI presupposes the existence of a CI pipeline to be broken."},
+    {"src": "missing_onboarding_doc", "dst": "few_active_contributors", "type": "causes", "confidence": 0.65, "evidence": "Even without build issues, lack of docs reduces the funnel of new contributors."},
+    {"src": "bus_factor_of_one", "dst": "project_death", "type": "enables", "confidence": 0.85, "evidence": "Concentrating all knowledge in one person makes a single departure terminal."}
+  ]
+}

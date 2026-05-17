@@ -1,0 +1,118 @@
+{
+  "doc_id": "project_brain_protocol",
+  "nodes": [
+    {
+      "id": "brain_project",
+      "label": "brAIn project",
+      "type": "artifact",
+      "description": "Causal knowledge graph system backed by Kuzu DB. Stores the structural causes and effects extracted from documents — not the text itself. Claude performs semantic extraction; brain.py CLI handles persistence, querying, and validation. Designed to accumulate structural knowledge across sessions so that re-reading source documents is unnecessary.",
+      "importance": 1.0,
+      "sources": ["project_brain_protocol", "project:brain"]
+    },
+    {
+      "id": "node_creation_filter",
+      "label": "Node creation filter",
+      "type": "concept",
+      "importance": 0.85,
+      "description": "Extraction rule in SKILL.md: create a node only if the document says enough to write a real description (condition 1). A concept merely mentioned in passing gets no node. Condition formerly included 'at least one relation must exist' (condition 2) — this was removed as a pre-pass gate because relations are not yet known during the entity pass; applying it early caused legitimate mechanisms to be dropped. Condition 2 is now applied post-relation as an orphan review step.",
+      "sources": ["project_brain_protocol", "project:brain"]
+    },
+    {
+      "id": "section_inventory",
+      "label": "Section inventory",
+      "type": "process",
+      "importance": 0.8,
+      "description": "First step of the brAIn extraction workflow: before extracting any node, list every ##-level heading of the document as an explicit checklist. Each section must produce at least one node or an explicit skip decision. Prevents accidental section omissions, identified as the main source of incomplete extractions in structured design documents.",
+      "sources": ["project_brain_protocol", "project:brain"]
+    },
+    {
+      "id": "rejected_alternatives_capture",
+      "label": "Rejected alternatives capture",
+      "type": "process",
+      "importance": 0.85,
+      "description": "Extraction rule mandating that when a document explicitly rejects a design alternative with documented rationale, both the chosen approach and the rejected alternative must be extracted. The rejected alternative becomes a 'claim' node linked by 'contradicts' or 'prevents' to the chosen approach, with the rejection reason as evidence. Documented rejections are the most precise causal content in a design document — they encode WHY a path was not taken, which is exactly what a causal graph must preserve.",
+      "sources": ["project_brain_protocol", "project:brain"]
+    },
+    {
+      "id": "completeness_and_orphan_review",
+      "label": "Completeness and orphan review",
+      "type": "process",
+      "importance": 0.75,
+      "description": "Post-relation step in the brAIn extraction workflow: (1) coverage check — verify every section from the inventory has at least one node; re-read any section with zero nodes before deciding to skip; (2) orphan check — any node with zero relations after the relation pass is suspect; either add a relation or drop the node. This step replaces the old condition-2 pre-pass gate, which was applied too early and caused false negatives during entity extraction.",
+      "sources": ["project_brain_protocol", "project:brain"]
+    },
+    {
+      "id": "gap_verification",
+      "label": "Gap verification",
+      "type": "process",
+      "importance": 0.9,
+      "description": "Post-ingestion quality step in the brAIn extraction workflow (Step 7). Cognitively distinct from extraction: the extractor selects, the verifier compares. Protocol: (1) query all nodes tagged with the doc_id; (2) re-read the source document with the node list visible; (3) go section by section — for each section ask whether its core content is represented in the graph; (4) produce a gap list; (5) for each gap either extract now (re-ingest is idempotent) or skip with an explicit written reason. Key property: detects semantic omissions that structural checks miss — a mechanism spread across three sections with no dedicated node, a decision whose rationale was lost, a section skimmed because it appeared late in the document. These are the most common and most damaging extraction failures. Generalizable to any project and any document type.",
+      "sources": ["project_brain_protocol", "project:brain"]
+    }
+  ],
+  "rels": [
+    {
+      "src": "node_creation_filter",
+      "dst": "brain_project",
+      "type": "part_of",
+      "confidence": 1.0,
+      "evidence": "The node creation filter is a quality gate in the brAIn extraction protocol defined in SKILL.md — it applies to every document ingested into the graph."
+    },
+    {
+      "src": "section_inventory",
+      "dst": "brain_project",
+      "type": "part_of",
+      "confidence": 1.0,
+      "evidence": "Section inventory is a step in brAIn's ingestion workflow, introduced to guarantee systematic coverage of structured documents."
+    },
+    {
+      "src": "section_inventory",
+      "dst": "node_creation_filter",
+      "type": "precedes",
+      "confidence": 1.0,
+      "evidence": "The section inventory (Step 2) must run before the entity extraction pass (Step 3) so that the checklist exists before any node is created."
+    },
+    {
+      "src": "completeness_and_orphan_review",
+      "dst": "node_creation_filter",
+      "type": "enables",
+      "confidence": 0.9,
+      "evidence": "By deferring the 'at least one relation' check to post-relation, the node creation filter is freed from a condition it could not evaluate correctly at entity-pass time. The two steps together achieve what the old combined filter tried but failed to do."
+    },
+    {
+      "src": "rejected_alternatives_capture",
+      "dst": "brain_project",
+      "type": "part_of",
+      "confidence": 1.0,
+      "evidence": "Rejected alternatives capture is a special-case extraction rule in brAIn's SKILL.md, targeting design documents that document why alternatives were not chosen."
+    },
+    {
+      "src": "rejected_alternatives_capture",
+      "dst": "section_inventory",
+      "type": "requires",
+      "confidence": 0.8,
+      "evidence": "To apply the rejected-alternatives rule reliably, the extractor must have already inventoried the document structure — otherwise sections documenting rejected alternatives can be missed entirely."
+    },
+    {
+      "src": "gap_verification",
+      "dst": "brain_project",
+      "type": "part_of",
+      "confidence": 1.0,
+      "evidence": "Gap verification is Step 7 of brAIn's ingestion workflow, added after observing that structural checks (audit, orphan review) systematically miss semantic omissions."
+    },
+    {
+      "src": "gap_verification",
+      "dst": "completeness_and_orphan_review",
+      "type": "precedes",
+      "confidence": 0.9,
+      "evidence": "Completeness and orphan review (pre-emit) and gap verification (post-ingest) are two distinct passes. The first catches structural problems before the payload is sent; the second catches semantic omissions by comparing the ingested graph against the source document — a comparison that is only possible after ingestion."
+    },
+    {
+      "src": "gap_verification",
+      "dst": "section_inventory",
+      "type": "requires",
+      "confidence": 0.9,
+      "evidence": "Gap verification goes section by section through the source document. Without the section inventory produced at Step 2, the verifier has no checklist to work from and falls back to the same holistic judgment that caused the omissions in the first place."
+    }
+  ]
+}

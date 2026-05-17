@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual env
+.venv/
+venv/
+
+# Kuzu database
+graph/
+
+# Generated logs
+extension_requests.jsonl
+potential_duplicates.jsonl
+
+# Secrets (API keys etc.)
+Important/
+
+# Personal Claude Code local settings
+.claude/settings.local.json
+
+# Obsidian vault (unrelated to the project)
+Brain/
+
+# Personal project payloads (not examples)
+projects/monai/
+
+# Experiment artifacts
+experiments/*/corpus/
+experiments/*/results/
+experiments/*/extractions/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+ui/frontend/node_modules/
+ui/frontend/dist/

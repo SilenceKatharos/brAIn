@@ -1,0 +1,8 @@
+kuzu==0.11.3
+click==8.1.7
+pytest==8.3.4
+
+# Used only by experiments/ai_wiki — not required for brain.py itself.
+anthropic==0.102.0
+wikipedia-api==0.14.1
+requests==2.34.2
