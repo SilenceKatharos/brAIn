@@ -139,3 +139,10 @@ echo "Quick test:"
 echo "  brain stats"
 echo "  brain causes project_death     # walks the OSS-mortality sample"
 echo "  brain show brain_sync_agent_script  # see brAIn's own self-doc"
+echo ""
+echo "Launch the explorer UI (backend + frontend in one go):"
+echo "  ./ui/start.sh                  # → http://localhost:5173"
+if [ "$SKIP_UI" = true ]; then
+    echo "  (You ran --no-ui, so the frontend deps aren't installed. To enable:"
+    echo "   cd ui/frontend && npm install)"
+fi
