@@ -14,6 +14,7 @@ from pathlib import Path
 import click
 
 from lib import audit as audit_mod
+from lib import check as check_mod
 from lib import export_import
 from lib import ingest as ingest_mod
 from lib import merge as merge_mod
@@ -56,16 +57,139 @@ def init(ctx: click.Context) -> None:
     click.echo(f"initialized: {target}")
 
 
+def _print_check_report(rep: check_mod.CheckReport, prefix: str = "") -> None:
+    """Print a CheckReport to stderr with clear severity markers."""
+    if rep.project_tag:
+        click.echo(f"{prefix}project tag auto-injected: {rep.project_tag}", err=True)
+    if rep.rejected_nodes:
+        click.echo(f"{prefix}X {len(rep.rejected_nodes)} node(s) rejected:", err=True)
+        for rn in rep.rejected_nodes[:5]:
+            click.echo(f"    - {rn.get('reason')}: {rn.get('raw', {}).get('label', '?')}", err=True)
+    if rep.rejected_rels:
+        click.echo(f"{prefix}X {len(rep.rejected_rels)} rel(s) rejected:", err=True)
+        for rr in rep.rejected_rels[:5]:
+            click.echo(f"    - {rr.get('reason')}: {rr.get('raw', {}).get('src')} -> {rr.get('raw', {}).get('dst')}", err=True)
+    if rep.missing_endpoints:
+        click.echo(f"{prefix}X {len(rep.missing_endpoints)} rel(s) reference missing nodes (slug pitfall?):", err=True)
+        for me in rep.missing_endpoints[:5]:
+            missing = "src" if me["src_missing"] else ""
+            if me["dst_missing"]:
+                missing = (missing + "+dst") if missing else "dst"
+            click.echo(f"    - {me['src']} --[{me['type']}]--> {me['dst']}  (missing: {missing})", err=True)
+    if not rep.causal_check_passed:
+        click.echo(f"{prefix}X causal check failed: {rep.causal_check_reason}", err=True)
+    if rep.rewritten_ids:
+        click.echo(f"{prefix}! {len(rep.rewritten_ids)} id(s) rewritten by slugify:", err=True)
+        for ri in rep.rewritten_ids[:5]:
+            click.echo(f"    - '{ri['proposed']}' -> '{ri['canonical']}'  (label: {ri['label']})", err=True)
+    if rep.lint_issues:
+        click.echo(f"{prefix}! {len(rep.lint_issues)} lint warning(s):", err=True)
+        for li in rep.lint_issues[:8]:
+            click.echo(f"    - [{li.kind}] {li.target}: {li.detail}", err=True)
+    if rep.potential_duplicates:
+        click.echo(f"{prefix}! {len(rep.potential_duplicates)} potential duplicate(s) against existing graph:", err=True)
+        for pd in rep.potential_duplicates[:5]:
+            cand_str = ", ".join(c["id"] for c in pd["candidates"][:3])
+            click.echo(f"    - new '{pd['new_id']}' ('{pd['new_label']}') ~ existing: {cand_str}", err=True)
+
+
 @cli.command()
 @click.argument("file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.pass_context
-def ingest(ctx: click.Context, file: Path) -> None:
-    """Ingest nodes and relations from a JSON file."""
+def check(ctx: click.Context, file: Path) -> None:
+    """Dry-run validation of a payload: schema, slugs, endpoints, causal balance, duplicates.
+
+    Exits non-zero if any error-level issue is found.
+    """
     conn = _conn(ctx.obj["db_path"])
     init_schema(conn)
     payload = json.loads(file.read_text(encoding="utf-8"))
+    report = check_mod.check_payload(payload, conn)
+    click.echo(f"doc_id: {report.doc_id}")
+    click.echo(f"  payload: {report.node_count} node(s), {report.rel_count} rel(s)")
+    _print_check_report(report, prefix="  ")
+    if report.has_errors:
+        click.echo("\nresult: FAIL — fix the errors above before ingest", err=True)
+        sys.exit(2)
+    if report.has_warnings:
+        click.echo("\nresult: PASS with warnings (ingest would succeed)")
+        sys.exit(1)
+    click.echo("\nresult: PASS — payload is clean")
+
+
+def _print_post_ingest_audit(conn) -> None:
+    """Print a 5-line health summary after ingest. Surfaces causal/structural balance."""
+    report = audit_mod.run_audit(conn)
+    m = report.metrics
+    click.echo("\n# Post-ingest health")
+    click.echo(f"  total: {m['total_nodes']} nodes, {m['total_rels']} rels")
+    click.echo(
+        f"  causal {m.get('causal_ratio', 0):.0%} | "
+        f"structural {m.get('structural_dominance', 0):.0%} | "
+        f"tradeoff {m.get('tradeoff_ratio', 0):.0%} | "
+        f"orphans {m.get('orphan_ratio', 0):.0%} | "
+        f"related_to {m.get('related_to_ratio', 0):.0%}"
+    )
+    for w in report.warnings:
+        click.echo(f"  ! {w}", err=True)
+    for e in report.errors:
+        click.echo(f"  X {e}", err=True)
+
+
+def _refresh_known_projects_cache(conn) -> None:
+    """Write /tmp/brain_known_projects.txt with one project name per line.
+
+    Read by brain_user_prompt.sh on every user message to decide whether to
+    inject the graph-first reminder. Refreshed after every ingest so a newly-
+    registered project becomes detectable on the next turn without a kuzu
+    round-trip from the hook.
+    """
+    from lib.db import rows as db_rows  # local import to keep top-level minimal
+    try:
+        result = db_rows(conn.execute(
+            "MATCH (n:Node) UNWIND n.sources AS s "
+            "WITH s WHERE s STARTS WITH 'project:' "
+            "RETURN DISTINCT s"
+        ))
+        names = sorted({r["s"][len("project:"):] for r in result if r.get("s")})
+        Path("/tmp/brain_known_projects.txt").write_text("\n".join(names) + "\n")
+    except Exception:
+        # Cache refresh is best-effort; never fail an ingest because of it.
+        pass
+
+
+@cli.command()
+@click.argument("file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--force", is_flag=True, help="Ingest even if check finds error-level issues.")
+@click.option("--no-causal-check", is_flag=True, help="Skip the causal-balance precondition.")
+@click.pass_context
+def ingest(ctx: click.Context, file: Path, force: bool, no_causal_check: bool) -> None:
+    """Ingest nodes and relations from a JSON file.
+
+    Runs ``brain check`` first and aborts unless --force is passed.
+    Prints a post-ingest health summary so quality issues surface immediately.
+    """
+    conn = _conn(ctx.obj["db_path"])
+    init_schema(conn)
+    payload = json.loads(file.read_text(encoding="utf-8"))
+
+    pre = check_mod.check_payload(payload, conn)
+    if no_causal_check:
+        pre.causal_check_passed = True
+    if pre.has_errors and not force:
+        click.echo(f"doc_id: {pre.doc_id}", err=True)
+        click.echo("pre-ingest check FAILED — aborting (use --force to override):", err=True)
+        _print_check_report(pre, prefix="  ")
+        sys.exit(2)
+    if pre.has_warnings:
+        click.echo("pre-ingest warnings (ingest will proceed):", err=True)
+        _print_check_report(pre, prefix="  ")
+        click.echo("", err=True)
+
     report = ingest_mod.ingest_payload(conn, payload, log_root=LOG_ROOT)
     click.echo(f"doc_id: {report.doc_id}")
+    if report.project_tag_injected:
+        click.echo(f"  project tag    : {report.project_tag_injected} (auto-injected on every node/rel)")
     click.echo(
         f"  nodes: {report.nodes_created} created, {report.nodes_updated} updated"
     )
@@ -78,17 +202,30 @@ def ingest(ctx: click.Context, file: Path) -> None:
             f"{report.rels_purged_deleted} rel(s) deleted"
         )
     if report.rejected_nodes:
-        click.echo(f"  rejected nodes: {len(report.rejected_nodes)} (see extension_requests.jsonl)")
+        click.echo(f"  X rejected nodes: {len(report.rejected_nodes)} (see extension_requests.jsonl)", err=True)
     if report.rejected_rels:
-        click.echo(f"  rejected rels : {len(report.rejected_rels)} (see extension_requests.jsonl)")
+        click.echo(f"  X rejected rels : {len(report.rejected_rels)} (see extension_requests.jsonl)", err=True)
+    if report.skipped_rels:
+        click.echo(f"  X skipped rels (missing endpoint): {len(report.skipped_rels)} — DATA LOSS", err=True)
+        for sk in report.skipped_rels[:5]:
+            click.echo(f"      - {sk.get('src')} --[{sk.get('type')}]--> {sk.get('dst')}", err=True)
     if report.rewritten_ids:
-        click.echo(f"  rewritten ids: {len(report.rewritten_ids)}")
+        click.echo(f"  ! rewritten ids: {len(report.rewritten_ids)} (label had forbidden char or proposed id mismatch)", err=True)
     if report.potential_duplicates:
         click.echo(
-            f"  potential duplicates: {len(report.potential_duplicates)} (see potential_duplicates.jsonl)"
+            f"  ! potential duplicates: {len(report.potential_duplicates)} (see potential_duplicates.jsonl)",
+            err=True,
         )
-    if report.skipped_rels:
-        click.echo(f"  skipped rels (missing endpoint): {len(report.skipped_rels)}")
+
+    _print_post_ingest_audit(conn)
+    _refresh_known_projects_cache(conn)
+
+    exit_code = 0
+    if report.rejected_nodes or report.rejected_rels or report.skipped_rels:
+        exit_code = 2
+    elif report.lint_issues or report.rewritten_ids:
+        exit_code = 1
+    sys.exit(exit_code)
 
 
 @cli.command()
@@ -299,10 +436,13 @@ def audit(ctx: click.Context, as_json: bool) -> None:
     for row in report.metrics["rels_by_type"]:
         click.echo(f"    rel:{row['type']:<12} {row['c']}")
     click.echo("\n# Health")
-    click.echo(f"  related_to ratio   : {report.metrics.get('related_to_ratio', 0):.1%}")
+    click.echo(f"  related_to ratio    : {report.metrics.get('related_to_ratio', 0):.1%}")
     click.echo(f"  no-description ratio: {report.metrics.get('no_description_ratio', 0):.1%}")
-    click.echo(f"  orphan ratio       : {report.metrics.get('orphan_ratio', 0):.1%}")
-    click.echo(f"  single-source rels : {report.metrics.get('single_source_rels', 0)}")
+    click.echo(f"  orphan ratio        : {report.metrics.get('orphan_ratio', 0):.1%}")
+    click.echo(f"  single-source rels  : {report.metrics.get('single_source_rels', 0)}")
+    click.echo(f"  causal ratio        : {report.metrics.get('causal_ratio', 0):.1%}")
+    click.echo(f"  structural dominance: {report.metrics.get('structural_dominance', 0):.1%}")
+    click.echo(f"  tradeoff ratio      : {report.metrics.get('tradeoff_ratio', 0):.1%}")
     if report.metrics["confidence_by_rel_type"]:
         click.echo("\n# Avg confidence by rel type")
         for row in report.metrics["confidence_by_rel_type"]:

@@ -7,14 +7,24 @@ creating nodes (query_graph tool), not from a hard type constraint.
 
 Relation types are strict: only whitelisted values are accepted. The
 causal vocabulary must not drift — it is the semantic core of the graph.
+
+Lint issues (label slug pitfalls, description length, evidence length)
+are surfaced via ValidationResult.lint_issues. They never block ingest
+on their own but the CLI exits non-zero unless --force is passed.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
 from lib.slugify import slugify, SlugifyError
+
+DESCRIPTION_MIN_LEN = 30
+DESCRIPTION_MAX_LEN = 400
+EVIDENCE_MIN_LEN = 30
+LABEL_FORBIDDEN_CHARS = re.compile(r"[()/.+]")
 
 REFERENCE_NODE_TYPES = frozenset(
     [
@@ -68,6 +78,14 @@ class RelPayload:
 
 
 @dataclass
+class LintIssue:
+    """Non-blocking quality warning surfaced at ingest time."""
+    kind: str  # 'label_forbidden_char' | 'description_too_long' | 'description_too_short' | 'evidence_too_short'
+    target: str  # node id or rel "src->dst:type"
+    detail: str
+
+
+@dataclass
 class ValidationResult:
     nodes: list[NodePayload] = field(default_factory=list)
     rels: list[RelPayload] = field(default_factory=list)
@@ -75,13 +93,30 @@ class ValidationResult:
     rejected_rels: list[dict] = field(default_factory=list)
     rewritten_ids: list[dict] = field(default_factory=list)
     extension_node_types: list[dict] = field(default_factory=list)  # unknown types, accepted but logged
+    lint_issues: list[LintIssue] = field(default_factory=list)
+
+
+_DOC_ID_PATTERN = re.compile(r"^project_([a-z0-9]+)(?:_.+)?$")
+
+
+def derive_project_tag(doc_id: str) -> str | None:
+    """Return 'project:<name>' for doc_ids following 'project_<name>_<aspect>'.
+
+    Returns None if the doc_id doesn't match the convention, so callers can
+    skip the auto-tag injection (e.g. for non-project docs).
+    """
+    m = _DOC_ID_PATTERN.match(doc_id)
+    return f"project:{m.group(1)}" if m else None
 
 
 def validate_payload(payload: dict[str, Any]) -> tuple[str, ValidationResult]:
     """Validate and normalize a raw ingest payload.
 
-    Returns the ``doc_id`` and a :class:`ValidationResult`. Caller is
-    responsible for logging the rejection/rewrite lists.
+    Auto-injects ``project:<name>`` into every node and rel ``sources`` when
+    the doc_id follows the project convention. Surfaces lint issues
+    (label slugs, description length, evidence length) via
+    ``ValidationResult.lint_issues``. Caller is responsible for logging
+    the rejection/rewrite lists.
     """
     doc_id = payload.get("doc_id")
     if not doc_id or not isinstance(doc_id, str):
@@ -98,6 +133,15 @@ def validate_payload(payload: dict[str, Any]) -> tuple[str, ValidationResult]:
         normalized = _validate_rel(raw, res)
         if normalized is not None:
             res.rels.append(normalized)
+
+    project_tag = derive_project_tag(doc_id)
+    if project_tag:
+        for n in res.nodes:
+            if project_tag not in n.sources:
+                n.sources.append(project_tag)
+        for r in res.rels:
+            if project_tag not in r.sources:
+                r.sources.append(project_tag)
 
     return doc_id, res
 
@@ -116,6 +160,12 @@ def _validate_node(raw: dict, res: ValidationResult) -> NodePayload | None:
         return None
     if ntype not in REFERENCE_NODE_TYPES:
         res.extension_node_types.append({"type": ntype, "label": label})
+    if LABEL_FORBIDDEN_CHARS.search(label):
+        res.lint_issues.append(LintIssue(
+            kind="label_forbidden_char",
+            target=label,
+            detail=f"label contains one of ()/.+ — slug will silently rewrite the id; rename label to plain ASCII to avoid",
+        ))
     try:
         canonical = slugify(label)
     except SlugifyError as exc:
@@ -124,6 +174,20 @@ def _validate_node(raw: dict, res: ValidationResult) -> NodePayload | None:
     proposed = raw.get("id")
     if proposed and proposed != canonical:
         res.rewritten_ids.append({"proposed": proposed, "canonical": canonical, "label": label})
+    description = (raw.get("description") or "").strip()
+    if description:
+        if len(description) > DESCRIPTION_MAX_LEN:
+            res.lint_issues.append(LintIssue(
+                kind="description_too_long",
+                target=canonical,
+                detail=f"description is {len(description)} chars (> {DESCRIPTION_MAX_LEN}) — paragraph antipattern; one disambiguating sentence is enough",
+            ))
+        elif len(description) < DESCRIPTION_MIN_LEN:
+            res.lint_issues.append(LintIssue(
+                kind="description_too_short",
+                target=canonical,
+                detail=f"description is {len(description)} chars (< {DESCRIPTION_MIN_LEN}) — too poor to make the source disposable",
+            ))
     importance = raw.get("importance", 0.5)
     try:
         importance = float(importance)
@@ -166,12 +230,19 @@ def _validate_rel(raw: dict, res: ValidationResult) -> RelPayload | None:
     confidence = max(0.0, min(1.0, confidence))
     raw_sources = raw.get("sources") or []
     extra_sources = [s for s in raw_sources if isinstance(s, str)]
+    evidence = (raw.get("evidence") or "").strip()
+    if evidence and len(evidence) < EVIDENCE_MIN_LEN:
+        res.lint_issues.append(LintIssue(
+            kind="evidence_too_short",
+            target=f"{src}->{dst}:{rtype}",
+            detail=f"evidence is {len(evidence)} chars (< {EVIDENCE_MIN_LEN}) — must explain 'X causes Y because Z', not a single word",
+        ))
     return RelPayload(
         src=src,
         dst=dst,
         type=rtype,
         confidence=confidence,
-        evidence=(raw.get("evidence") or "").strip(),
+        evidence=evidence,
         factor=(raw.get("factor") or "").strip(),
         sources=extra_sources,
     )

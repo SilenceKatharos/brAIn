@@ -1,82 +1,54 @@
 #!/usr/bin/env python3
-"""Stop hook: block session end if files were modified without any graph update."""
-import json
+"""Stop hook: spawn the background sync agent and exit cleanly.
+
+The previous implementation nagged Claude to update the graph itself; in
+practice this got ignored on long sessions. We now offload the graph sync
+to a background process (brain_sync_agent.sh) that runs while the user is
+typing the next message. The Stop hook returns immediately so the foreground
+session never waits on graph maintenance.
+"""
+import os
+import subprocess
 import sys
 from pathlib import Path
 
 MODIFIED_FILE = Path("/tmp/brain_session_modified.txt")
 SESSION_START_FILE = Path("/tmp/brain_session_start.txt")
-BLOCKED_FILE = Path("/tmp/brain_stop_blocked.txt")
 BRAIN_DIR = Path(__file__).resolve().parent
+SYNC_AGENT = BRAIN_DIR / "brain_sync_agent.sh"
 
 
-def cleanup():
-    MODIFIED_FILE.unlink(missing_ok=True)
-    SESSION_START_FILE.unlink(missing_ok=True)
-    BLOCKED_FILE.unlink(missing_ok=True)
-
-
-def main():
-    # If already blocked once, trust Claude's judgment and allow
-    if BLOCKED_FILE.exists():
-        cleanup()
+def main() -> None:
+    # Skip if called from inside the sync agent (avoids recursion)
+    if os.environ.get("BRAIN_HOOK_DISABLED") == "1":
         sys.exit(0)
 
-    # No files modified this session → allow
-    if not MODIFIED_FILE.exists() or MODIFIED_FILE.stat().st_size == 0:
-        cleanup()
-        sys.exit(0)
+    # Always spawn the sync agent: it uses git diff against the session-start
+    # HEAD as the primary source, so it must run even when the PostToolUse
+    # queue is empty (e.g. when all modifications came from Bash cp/mv/sed).
+    # The agent itself decides whether there's anything to do.
 
-    # Determine session start time
-    if SESSION_START_FILE.exists():
-        session_start = SESSION_START_FILE.read_text().strip()
-    else:
-        import datetime
-        session_start = (
-            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    # Query Kuzu: any nodes updated since session start?
-    sys.path.insert(0, str(BRAIN_DIR))
-    try:
-        from lib.db import connect, rows as db_rows
-
-        conn = connect(BRAIN_DIR / "graph" / "kuzu_db")
-        result = db_rows(
-            conn.execute(
-                "MATCH (n:Node) WHERE n.updated_at >= $start RETURN count(n) AS c",
-                {"start": session_start},
+    # Spawn the sync agent in the background, fully detached from this hook.
+    # Pass the session's cwd as arg 1 so the sync agent knows which project
+    # to sync (its per-project snapshot, HEAD baseline and status files
+    # derive from this).
+    if SYNC_AGENT.is_file() and os.access(SYNC_AGENT, os.X_OK):
+        try:
+            session_cwd = os.getcwd()
+            subprocess.Popen(
+                ["nohup", str(SYNC_AGENT), session_cwd],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
             )
-        )
-        graph_updates = int(result[0]["c"]) if result else 0
-    except Exception:
-        cleanup()
-        sys.exit(0)
+        except Exception:
+            # Spawn failure must not block the user's Stop
+            pass
 
-    # Graph was updated this session → allow
-    if graph_updates > 0:
-        cleanup()
-        sys.exit(0)
-
-    # Collect modified files
-    lines = MODIFIED_FILE.read_text().strip().splitlines()
-    modified = sorted({ln.strip() for ln in lines if ln.strip()})[:20]
-    names = [Path(f).name for f in modified]
-    files_str = ", ".join(names)
-
-    # Mark as blocked (next Stop invocation will allow unconditionally)
-    BLOCKED_FILE.write_text("1")
-
-    msg = (
-        f"Fichiers modifies cette session sans mise a jour du graphe brAIn : {files_str}. "
-        "Si ces changements contiennent des decisions structurelles importantes "
-        "(architecture, mecanismes causaux, nouveaux composants, tradeoffs de design), "
-        "utilise brain_find + brain_ingest pour mettre a jour le graphe avant de terminer. "
-        "Si les modifications sont des details d'implementation mineurs sans impact structural, "
-        "tu peux terminer — cette verification ne se repetira pas."
-    )
-
-    print(json.dumps({"continue": False, "stopReason": msg}))
+    # Always allow the Stop — the sync runs in background
+    sys.exit(0)
 
 
 if __name__ == "__main__":

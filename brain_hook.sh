@@ -1,12 +1,22 @@
 #!/usr/bin/env bash
+# PostToolUse hook: silently track Edit/Write file paths for the sync agent's
+# fallback queue. The actual graph maintenance is performed by the background
+# sync agent (brain_sync_agent.sh) at Stop — NOT by the working session.
+# This hook used to nag Claude to ingest the change inline; that's now wrong
+# (it would double up with the sync agent and bypass the strict workflow).
+
+# Skip when called from inside the sync agent itself (prevents recursion).
+[ "${BRAIN_HOOK_DISABLED:-0}" = "1" ] && exit 0
+
 INPUT=$(cat)
 FILE=$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // .tool_input.new_file_path // ""')
 
-# Log modified file for Stop hook consistency check
+# Append modified file to the sync agent's fallback queue. The agent prefers
+# its snapshot/git diff sources but uses this queue when neither is available.
 if [ -n "$FILE" ] && [ "$FILE" != "null" ]; then
     echo "$FILE" >> /tmp/brain_session_modified.txt
 fi
 
-DISPLAY_FILE="${FILE:-?}"
-MSG="[brAIn] ${DISPLAY_FILE} vient d'etre modifie. Mets a jour le graphe : si le changement est structurel (architecture, mecanisme, tradeoff), cree ou enrichis un noeud dedie. Si c'est un detail mineur (UX, renommage, style), mets quand meme a jour la description du noeud existant le plus proche. Ne pas ignorer."
-jq -cn --arg msg "$MSG" '{suppressOutput:true,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$msg}}'
+# No additionalContext — the sync agent handles everything; Claude doesn't
+# need a per-edit reminder, that's what the UserPromptSubmit hook is for.
+echo '{"suppressOutput":true}'

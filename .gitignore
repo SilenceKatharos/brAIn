@@ -17,19 +17,26 @@ graph/
 extension_requests.jsonl
 potential_duplicates.jsonl
 
-# Secrets (API keys etc.)
+# Local secrets (never committed)
 Important/
+.secrets/
+*.key
+*.pem
 
 # Personal Claude Code local settings
 .claude/settings.local.json
 
-# Obsidian vault (unrelated to the project)
+# User-local notes / vaults that may sit alongside the repo
 Brain/
+notes/
+.obsidian/
 
-# Personal project payloads (not examples)
-projects/monai/
-projects/calcapp/
-projects/logpilot/
+# Project payloads — ignore every subdir by default, then allow the
+# public examples explicitly. Keeps personal project names out of the
+# published .gitignore.
+projects/*/
+!projects/brain/
+!projects/ripgrep/
 
 # Experiment artifacts
 experiments/*/corpus/

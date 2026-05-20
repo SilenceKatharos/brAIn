@@ -1,368 +1,209 @@
 ---
 name: brain
-description: Causal knowledge graph CLI backed by Kuzu. Ingest documents by extracting nodes and causal relations into a persistent graph, then query the graph instead of rereading the sources. Use when the user asks to "add to the brain", "ingest into the graph", "what causes X", "what does Y lead to", or "how does A relate to B" against an existing knowledge graph.
+description: Causal knowledge graph CLI backed by Kuzu. Query existing nodes/edges to answer "why / how / what-relates-to / tradeoff" questions without re-reading source files. Ingestion is automated by the background sync agent — do NOT call brain_ingest yourself unless the user explicitly invokes /ingest.
 ---
 
 # brAIn — Causal Knowledge Graph Skill
 
-This skill lets you treat a Kuzu graph as the user's external causal memory.
-You are responsible for the **semantic extraction**: reading a document, picking
-out atomic claims, and emitting structured JSON. The `brain.py` CLI does the
-plumbing — validation, deduplication, persistence, querying.
+A Kuzu graph used as the user's external causal memory. Two roles share this
+graph:
 
-## When to invoke
+1. **You, in a working session** — QUERY the graph for context (architecture,
+   tradeoffs, "why" questions). Do NOT ingest. Graph maintenance is not your
+   job.
+2. **The background sync agent** (`brain_sync_agent.sh`) — spawned by the Stop
+   hook, runs in a separate headless `claude --print` process, extracts
+   structural changes from the project diff using the full protocol below
+   and ingests them with `brain ingest`. This is the ONLY automated path
+   that writes to the graph.
 
-Trigger phrases (in any language):
-- "ingest this into the brain", "add this document to the graph"
-- "what does the brain say about X", "ask the brain why Y"
-- "what causes X according to my notes", "what does Y lead to"
-- "how does A relate to B in the brain", "find a path from A to B"
-- "audit the graph", "show stats of the brain"
+The single exception where a working session ingests: the user explicitly
+invokes the `/ingest` slash command, or types "ingest this document". Then
+follow the extraction protocol described in this file.
 
-Don't invoke for:
-- Linear note-taking — that belongs in Obsidian or a markdown file.
-- Storing text verbatim — this graph stores *structure*, not paragraphs.
-- Storing user preferences — use the auto-memory system for those.
+**The system enforces a lot of rules at ingest time** (see "What the code
+enforces" below). When you do ingest (user-invoked only): write what you
+think is right, run `brain check`, fix what it reports, iterate. Don't try
+to remember every rule.
 
-## Project layout
+## When to use the QUERY tools
 
-```
-brAIn/
-├── brain.py              # CLI entrypoint
-├── lib/                  # backing modules
-├── graph/kuzu_db/        # the persistent graph (created on first init)
-├── examples/sample.json  # reference extraction
-└── extension_requests.jsonl, potential_duplicates.jsonl  # generated logs
-```
+Use `brain_find`, `brain_show`, `brain_causes`, `brain_effects`, `brain_paths`
+when the user asks: "why X", "how does X relate to Y", "what alternative was
+rejected", "show me the design rationale for Z", "what does this module
+prevent / enable in the rest of the system".
 
-Run the CLI with `./.venv/bin/python brain.py <command>` from the project root,
-or use whatever Python environment has `kuzu` and `click` installed.
+Use Read on source files for: exact function signatures, current line numbers
+for edits, debug output, post-edit verification, anything that depends on
+text exactness.
+
+## When to follow the ingestion protocol below
+
+ONLY when the user has explicitly asked for it. Phrases like "ingest this
+document", "/ingest <path>", "add this to the brain". Never spontaneously.
 
 ## Vocabulary
 
 ### Node types — open vocabulary
 
-Node types are a **reference vocabulary**, not a hard constraint. Any
-non-empty string type is accepted at ingest time. If the type is not in the
-reference list below, it is logged in `extension_requests.jsonl` for human
-review but the node is still created.
+Any non-empty string accepted; unknown types are logged but not rejected.
+Reuse existing nodes when possible — coherence comes from the `brain_find` /
+`brain_check` lookup, not from type enforcement.
 
-Coherence comes from the lookup-before-create protocol (`query_graph`), not
-from type enforcement. If a similar node already exists, reuse it — the type
-follows from the existing node, not from your classification.
+| Type        | When to use                                                     |
+|-------------|-----------------------------------------------------------------|
+| `concept`   | Abstract idea (eventual consistency).                           |
+| `entity`    | Named, identifiable thing (PostgreSQL).                         |
+| `event`     | Something that happens in time (2024 outage).                   |
+| `claim`     | A debatable assertion (cache invalidates too often).            |
+| `mechanism` | A process that turns a cause into an effect.                    |
+| `algorithm` | A named computational procedure (backpropagation, k-means).     |
+| `property`  | A measurable attribute (p99 latency).                           |
+| `artifact`  | A produced object (code, document, system, schema).             |
+| `process`   | A goal-directed sequence of steps.                              |
+| `person`    | A human actor.                                                  |
+| `place`     | A location.                                                     |
 
-### Node types (reference)
+### Relation types — strict whitelist (code rejects others)
 
-| Type | When to use |
-|------|-------------|
-| `concept` | Abstract idea (e.g., "eventual consistency"). |
-| `entity` | Named, identifiable thing (e.g., "PostgreSQL"). |
-| `event` | Something that happens in time (e.g., "2024 outage"). |
-| `claim` | A debatable assertion (e.g., "cache invalidates too often"). |
-| `mechanism` | A process that turns a cause into an effect. |
-| `algorithm` | A named computational procedure (e.g., "backpropagation", "k-means"). |
-| `property` | A measurable or qualifiable attribute (e.g., "p99 latency"). |
-| `person` | A human actor. |
-| `place` | A location. |
-| `artifact` | A produced object (code, document, system, schema). |
-| `process` | A goal-directed sequence of steps. |
+**Causal core (prefer these — the graph's reason to exist):**
 
-### Relation types — strict whitelist
+| Type          | Meaning                                          |
+|---------------|--------------------------------------------------|
+| `causes`      | A produces B.                                    |
+| `prevents`    | A blocks B from happening.                       |
+| `requires`    | B cannot exist without A.                        |
+| `enables`     | A makes B possible (without forcing it).         |
+| `precedes`    | A happens before B (temporal only, no causation).|
+| `contradicts` | A and B are logically incompatible.              |
 
-Relation types **are** strictly enforced. Any type outside this list is
-rejected and logged. The causal vocabulary must not drift — it is what makes
-the graph traversable and meaningful.
+**Structural:**
 
-**Causal core (prefer these):**
-| Type | Meaning |
-|------|---------|
-| `causes` | A produces B (factual or statistical). |
-| `prevents` | A blocks B from happening. |
-| `requires` | B cannot exist without A. |
-| `enables` | A makes B possible (without forcing it). |
-| `precedes` | A happens before B (temporal only, no causation). |
-| `contradicts` | A and B are logically incompatible. |
+| Type          | Meaning                                          |
+|---------------|--------------------------------------------------|
+| `is_a`        | A is a kind of B.                                |
+| `part_of`     | A is a component of B.                           |
+| `instance_of` | A is a concrete instance of B.                   |
+| `similar_to`  | A resembles B without being an instance.         |
+| `property_of` | A is a property of B.                            |
 
-**Structural support:**
-| Type | Meaning |
-|------|---------|
-| `is_a` | A is a kind of B. |
-| `part_of` | A is a component of B. |
-| `instance_of` | A is a concrete instance of B. |
-| `similar_to` | A resembles B without being an instance. |
-| `property_of` | A is a property of B. |
-
-**Fallback (avoid):**
-| Type | Meaning |
-|------|---------|
-| `related_to` | Unqualified link. Sign of lazy extraction — must stay under 5% of total edges. |
+**Fallback (audit warns above 5%):** `related_to`.
 
 ## Confidence calibration
 
-| Confidence | Meaning |
-|-----------:|---------|
-| `1.0` | Explicitly stated in the text with a direct causal verb. |
-| `0.7–0.9` | Reasonable inference. |
-| `0.4–0.6` | Plausible hypothesis not demonstrated by the text. |
-| `< 0.4` | Don't ingest — better to omit than to pollute. |
+| Confidence | Meaning                                              |
+|-----------:|------------------------------------------------------|
+| `1.0`      | Explicitly stated in the text with a direct verb.    |
+| `0.7–0.9`  | Reasonable inference.                                |
+| `0.4–0.6`  | Plausible hypothesis not demonstrated by the text.   |
+| `< 0.4`    | Don't ingest — better to omit than to pollute.       |
 
-## Agentic extraction — the query_graph tool
+## Extraction workflow
 
-When used via the API in agentic mode, you have access to a `query_graph`
-tool. The graph is long-term memory; your context window is working memory.
-You never load the whole graph — you retrieve only what you need, when you
-need it.
+### 1. Read the document in full. No skimming.
 
-**Protocol — follow this for every extraction:**
+### 2. Section inventory.
+List every `##`-level heading as your coverage checklist. Every section must
+produce ≥ 1 node or an explicit skip note — accidental skips are the main
+source of incomplete graphs.
 
-1. As you identify each concept in the document, call `query_graph(topic)`
-   before deciding to create a node.
-2. Read the returned neighborhood. If a node with equivalent semantics exists,
-   **reuse its `id` exactly** — do not mint a new node.
-3. If no match is found (or `match_count` is 0), create the node with a new id.
-4. Once all nodes and relations are decided, emit the final JSON in one block.
-
-**Tool response shape:**
-
-```json
-{
-  "topic": "neural network",
-  "match_count": 1,
-  "matches": [
-    {
-      "id": "neural_network",
-      "label": "Neural network",
-      "type": "concept",
-      "description": "Composite parametric function trained by gradient descent.",
-      "importance": 0.85,
-      "outgoing": [
-        {"rel_type": "enables", "confidence": 0.9, "dst": "backpropagation",
-         "dst_label": "Backpropagation", "dst_type": "algorithm"}
-      ],
-      "incoming": [
-        {"rel_type": "is_a", "confidence": 1.0, "src": "perceptron",
-         "src_label": "Perceptron", "src_type": "concept"}
-      ]
-    }
-  ]
-}
-```
-
-**Decision rule:**
-
-- **Reuse the id** if the existing label/description matches your candidate
-  (modulo synonymy, plural/singular, abbreviations). Example: "neural net"
-  → reuse `neural_network`.
-- **Create a new id** if the existing node and your candidate are related but
-  genuinely distinct. Example: `backpropagation` and `gradient_descent` are
-  distinct — link them, don't collapse them.
-- **When in doubt, reuse.** A merge via `brain.py merge` is cheaper than a
-  fragmented graph.
-
-**What the context does not dictate:**
-
-Do not blindly create relations to every neighbor shown in the tool response.
-Only add a relation if the *document being processed* actually supports it.
-
-## Ingestion workflow
-
-When the user asks you to add a document:
-
-**Step 1 — Read the document in full.** No skimming.
-
-**Step 2 — Structure inventory.** Before extracting anything, list every
-`##`-level heading (or equivalent structural unit). This is your extraction
-checklist. No section should be accidentally skipped — if a section produces
-zero nodes, that must be a conscious decision, not an oversight.
-
-**Step 3 — First pass: entities.** Work section by section through your
-checklist. For each section, extract every concept, mechanism, decision,
-property, and architectural choice the document *covers in depth*. Be generous
-at this stage — do not apply the relation filter yet (that comes in Step 5).
-
-For each node:
-- Pick `type` from the reference vocabulary (or any meaningful string if none fits).
-- Build a stable `id` from the label (snake_case, ASCII, max 80 chars).
-- Write a **comprehensive `description`**: how the concept works, its mechanism,
-  quantitative properties, key variants. A reader with only the graph should
-  lose no useful information. The source document must be disposable after
-  ingestion.
-- Set `importance` between 0 and 1 (0.5 default, 1.0 only for pivotal concepts).
-
-**Node creation rule — applied during pass 1:**
-> Create a node if this document says enough about the concept to write a real
-> description. A concept merely *mentioned in passing* (named but not explained)
-> does not get a node — wait for a document that actually covers it.
->
-> Do NOT apply a relation test at this stage. A node without relations yet is
-> fine; you will find or add its relations in Step 4, and review orphans in Step 5.
+### 3. First pass — nodes.
+Section by section, extract every concept the document *covers in depth*.
+For each node: pick `type`, write the `label` (plain ASCII — `brain_check`
+warns on `()/.+`), write the `description` (one disambiguating sentence,
+~30–400 chars — `brain_check` warns on both extremes), set `importance`
+(0.5 default, 1.0 for pivotal concepts only).
 
 **Three special cases that must never be missed:**
 
-1. **Marked decisions (`[ACQUIRED]`, ✓, "decided", etc.):** Any item the
-   document explicitly marks as decided or validated must produce a node. These
-   are the most reliable facts in the document — skip none.
+1. **Marked decisions** (`[ACQUIRED]`, ✓, "decided"): produce a node. The most
+   reliable facts in the document.
+2. **Rejected alternatives with documented rationale:** create a `claim` node
+   for the rejected approach, link it with `contradicts` (or `prevents`) to
+   the chosen approach, put the rejection rationale in `evidence`. This is
+   causal gold — the graph health metric `tradeoff_ratio` measures whether
+   you captured these.
+3. **Named sub-components with distinct causal roles:** if a parent concept
+   has N named sub-components, create individual nodes **only if each has a
+   distinct cause/effect fingerprint**. Otherwise bundle them in the parent's
+   description.
 
-2. **Rejected alternatives with documented rationale:** When the document
-   explains why an alternative was *not* chosen, extract it. The reason for
-   rejection is causal gold. Pattern: create a node for the rejected approach
-   (type `claim`), link it with `contradicts` or `prevents` to the chosen
-   approach, and put the full rejection rationale in `evidence`. Example:
-   *"Dollar-pegged PoUW reward"* `contradicts` *"Immutable core"* because
-   *"pegging requires a price oracle, which breaks the no-admin-key guarantee."*
+### 4. Second pass — relations.
+For each connection worth making:
+- Prefer a causal type. The graph is judged on its `causal_ratio`.
+- Fill `evidence` with the mechanism: "X causes Y because Z". `brain_check`
+  warns on evidence < 30 chars.
+- Calibrate `confidence`.
+- Avoid `related_to` — skip the edge rather than dilute.
 
-3. **Named sub-components with distinct causal roles:** If a concept has
-   N explicitly named sub-components (e.g., "7 components of R: R_C, R_V,
-   R_F…"), create individual nodes for each sub-component **if they have
-   distinct cause/effect relationships to other concepts**. If they are merely
-   parallel inputs to the same parent mechanism with no individual causal
-   fingerprint, bundle them in the parent node's description instead.
+### 5. `brain_check <payload>`.
+Dry-run validation. Reports missing endpoints, slug pitfalls, lint warnings,
+zero-causal payloads, potential duplicates against the existing graph. Fix
+and re-run until it says PASS.
 
-The CLI will canonicalize `id = slugify(label)` automatically; if your `id`
-differs, it gets rewritten and logged. To avoid rewrites, **keep your `label`
-short enough that its slug matches your intended `id`**.
+### 6. `brain_ingest <payload>`.
+Writes. Prints a post-ingest health summary: `causal | structural | tradeoff
+| orphans | related_to`. If the summary doesn't look right, you have material
+to fix before moving on. Refuses error-level payloads — strict by design.
 
-**Slugification pitfall**: special characters in labels are replaced by underscores.
-`"Reliability sigmoid G(f,d)"` → id `reliability_sigmoid_g_f_d`.
-`"H/C ratio v0.5"` → id `h_c_ratio_v0_5`.
-Any `rel` referencing the pre-rewrite id will be silently skipped.
-Rule: **use plain ASCII labels without parentheses, slashes, or dots** when
-writing payloads manually. Use `brain find <label>` after ingest to confirm
-the actual id before writing rels.
-
-**Step 4 — Second pass: relations.** For each pair worth connecting:
-- Prefer a causal type (`causes`, `prevents`, `requires`, `enables`).
-- Fill `evidence` with a **full explanation**: the mechanism, the condition, the
-  reasoning — not just a label. "X causes Y because Z" is the target. A single
-  vague word is not acceptable.
-- Calibrate `confidence` per the table above.
-- Avoid `related_to` — if you can't qualify the link, skip it.
-
-**Step 5 — Completeness + orphan review.**
-
-*Coverage check:* go back to your section checklist from Step 2. Every section
-should have ≥ 1 node. If a section has 0 nodes, re-read it and decide
-explicitly: extract something, or write a one-line note to yourself explaining
-the skip. Accidental skips are the main source of incomplete graphs.
-
-*Orphan check:* any node with 0 relations after Step 4 is suspect. Either find
-a meaningful relation to add (there almost always is one), or drop the node. A
-node with no edges contributes nothing to graph traversal.
-
-**Step 6 — Anti-duplicate check.**
-
-*In agentic API mode:* use the `query_graph` tool before each node creation
-(see "Agentic extraction" section above).
-
-*In interactive Claude Code mode:*
-
+### 7. Gap verification (cognitive).
+Re-read the source with the ingested node list visible:
 ```bash
-./brain.py find <label or fragment>
+brain query "MATCH (n:Node) WHERE '<doc_id>' IN n.sources RETURN n.label, n.type, n.description ORDER BY n.importance DESC"
 ```
+Section by section: is the core content represented as a dedicated node or
+clearly captured in some node's description? Each gap is either extracted
+(re-ingest is idempotent) or skipped with an explicit reason. Catches
+semantic omissions that structural audit cannot.
 
-If a close match already exists, reuse its `id` or accept that the ingest
-will log a potential-duplicate hint and let the user merge later via
-`brain.py merge`.
+## Anti-duplicate
 
-**Step 5 — Emit the JSON payload.**
+Before creating a node with a label close to an existing one, run
+`brain_find <fragment>`. The `brain_check` step also reports substring
+matches against the existing graph as warnings. When in doubt, **reuse** —
+fragmentation is worse than coarseness, and `brain merge` is always available
+later.
 
-```json
-{
-  "doc_id": "stable_slug_of_doc",
-  "nodes": [{...}, ...],
-  "rels":  [{...}, ...]
-}
-```
+## What the code enforces (so you don't have to remember)
 
-Save it (e.g., to `examples/<doc>.json`) and run:
+The validator + checker + auditor now handle these automatically:
 
-```bash
-./brain.py ingest <path-to-json>
-```
+- **`project:<name>` tag** is auto-injected on every node and rel based on
+  the `doc_id` (must match `project_<name>_<aspect>` or `project_<name>`).
+- **Slug pitfalls**: labels with `()`, `/`, `.`, `+` produce a warning at
+  check time so you can rename before `id` gets silently rewritten.
+- **Description length**: < 30 chars or > 400 chars → lint warning.
+- **Evidence length**: < 30 chars → lint warning (single-word evidence rejected).
+- **Self-loops**, **invalid rel types**, **importance/confidence out of [0,1]**
+  → rejected.
+- **Substring duplicate candidates** against the existing graph → reported by
+  `brain_check`.
+- **Missing endpoint** (a rel references a node id absent from both payload
+  and graph) → reported, blocks ingest unless `--force`.
+- **Zero causal edges** in a non-trivial payload → blocks ingest unless
+  `--force` or `--no-causal-check`.
+- **Causal ratio**, **structural dominance**, **tradeoff ratio**, **orphan
+  ratio**, **related_to ratio** → printed after every ingest.
+- **Re-ingestion of the same `doc_id`** is safe and idempotent — purges
+  previous contributions then writes the new ones.
 
-**Step 6 — Verify.** Read the printed delta. Then:
-
-```bash
-./brain.py stats
-./brain.py audit
-```
-
-If `audit` warns about high `related_to` ratio or many orphans, revisit the
-extraction. If it warns about node growth without matching relations, you
-probably extracted entities without connecting them — go back to step 3.
-
-**Step 7 — Gap verification.** This is the most important quality check.
-It is cognitively different from extraction: you are no longer selecting,
-you are comparing.
-
-1. Retrieve every node extracted from this document:
-
-```bash
-./brain.py query "MATCH (n:Node) WHERE any(s IN n.sources WHERE s = '<doc_id>') RETURN n.label, n.type, n.description ORDER BY n.importance DESC"
-```
-
-2. Re-read the source document with the node list visible.
-
-3. Go section by section. For each `##` section ask: *is the core content
-   of this section represented in the graph — either as a dedicated node or
-   clearly captured in an existing node's description?* If not, it is a gap.
-
-4. Produce a gap list. For each gap decide:
-   - **Extract now**: add the missing node(s) to the payload and re-ingest
-     (`doc_id` re-ingestion is safe and idempotent).
-   - **Skip with reason**: the section is implementation detail, already
-     covered elsewhere, or a pure open question — write a one-line note.
-
-5. Repeat until no unresolved gaps remain. Only then archive the source
-   document.
-
-**What gap verification catches that step 6 does not:** step 6 detects
-structural problems (orphan nodes, bad `related_to` ratio). Gap verification
-detects *semantic* omissions — a mechanism spread across three sections with
-no dedicated node, a decision whose rationale was lost, a section the
-extractor skimmed because it appeared late in the document. These are the
-most common and most damaging extraction failures.
-
-## Re-ingestion semantics
-
-Re-running `ingest` on a payload whose `doc_id` already exists is **safe and
-idempotent**. The ingester first purges every contribution of that `doc_id`
-(removes it from `Rel.sources` and the matching evidence; deletes the edge if
-`sources` becomes empty; nodes themselves are kept), then inserts the new
-payload. A document update therefore replaces its previous contributions
-cleanly, without disturbing relations introduced by other documents.
+You can override the strict checks with `--force` on the CLI. The MCP
+`brain_ingest` has no override — fix the payload.
 
 ## Query workflow
 
-Map the user's question to a CLI command:
+| Question shape                              | Command                              |
+|---------------------------------------------|--------------------------------------|
+| "Why did X happen?" / "What causes X?"      | `brain causes X`                     |
+| "What does Y lead to?"                      | `brain effects Y`                    |
+| "How does A relate to B?"                   | `brain paths A B`                    |
+| "Show me node X"                            | `brain show X`                       |
+| "Find nodes about <topic>"                  | `brain find <topic>`                 |
+| Advanced traversal                          | `brain query "<cypher>"`             |
 
-| Question shape | Command |
-|----------------|---------|
-| "Why did X happen?" / "What causes X?" | `brain.py causes X` |
-| "What does Y lead to?" / "If Y, then what?" | `brain.py effects Y` |
-| "How does A relate to B?" / "Path from A to B?" | `brain.py paths A B` |
-| "Show me node X" | `brain.py show X` |
-| "Find nodes about <topic>" | `brain.py find <topic>` |
-| Advanced traversal | `brain.py query "<cypher>"` |
-
-When building the natural-language answer, **cite the `evidence`** that
-appears in the CLI output. If a chain is built from low-confidence edges
-(below ~0.6), flag that explicitly to the user — don't smuggle weak inferences
-into a confident-sounding reply.
-
-## Anti-patterns
-
-- Inventing node types (e.g., `idea`, `risk`, `feeling`) — pick the closest
-  whitelisted type or omit.
-- Inventing relation types (e.g., `triggers`, `leads_to`, `influences`) —
-  `causes` / `enables` / `precedes` almost always covers it.
-- Over-using `related_to`. If you can't say *how* two things relate, skip the
-  edge. The 5% ceiling is enforced by `audit`.
-- Extracting nodes without any outgoing relation. Orphan nodes are dead
-  weight; the audit flags them.
-- Storing whole paragraphs in `description`. One disambiguating sentence is
-  enough; the structure carries the rest.
-- Mixing certain / inferred / speculative claims without marking confidence.
+When answering, **cite the `evidence`** printed by the CLI. If a chain
+contains edges with `confidence < 0.6`, flag that explicitly — don't smuggle
+weak inferences into a confident-sounding reply.
 
 ## Worked example
 
@@ -379,26 +220,26 @@ Extraction:
 {
   "doc_id": "redis_postmortem_2026_q1",
   "nodes": [
-    {"id": "ttl_5_seconds", "label": "TTL 5 seconds", "type": "claim",
-     "description": "Redis TTL configured at 5 seconds for hot keys."},
-    {"id": "request_interval_30s", "label": "Request interval 30s", "type": "property",
-     "description": "Median time between two requests on the same hot key."},
-    {"id": "cache_miss_storm", "label": "Cache miss storm", "type": "event",
-     "description": "Near-total cache miss rate on hot keys."},
-    {"id": "db_fallback", "label": "Database fallback", "type": "event",
-     "description": "Read traffic flowing to PostgreSQL when Redis misses."},
-    {"id": "p99_latency_800ms", "label": "p99 latency 800ms", "type": "property",
-     "description": "Observed 99th-percentile request latency."}
+    {"label": "TTL 5 seconds", "type": "claim",
+     "description": "Redis TTL configured at 5 seconds for hot keys — shorter than the mean inter-request interval, guarantees expiry between accesses."},
+    {"label": "Request interval 30s", "type": "property",
+     "description": "Median time between two requests on the same hot key — six times the configured TTL."},
+    {"label": "Cache miss storm", "type": "event",
+     "description": "Near-total cache miss rate on hot keys following the TTL/interval mismatch."},
+    {"label": "Database fallback", "type": "event",
+     "description": "Read traffic flowing to PostgreSQL when Redis misses — direct cache miss consequence."},
+    {"label": "p99 latency 800ms", "type": "property",
+     "description": "Observed 99th-percentile request latency during the incident, ~10x the normal cached path."}
   ],
   "rels": [
     {"src": "ttl_5_seconds", "dst": "cache_miss_storm", "type": "causes", "confidence": 0.95,
-     "evidence": "TTL shorter than mean inter-request time guarantees expiry between accesses."},
+     "evidence": "TTL shorter than mean inter-request time guarantees expiry between accesses — the entry is gone every time the next read comes."},
     {"src": "request_interval_30s", "dst": "cache_miss_storm", "type": "enables", "confidence": 0.9,
-     "evidence": "Slow request rate amplifies the effect of a short TTL."},
-    {"src": "cache_miss_storm", "dst": "db_fallback", "type": "causes", "confidence": 1.0,
-     "evidence": "Cache miss => the read goes to the database."},
-    {"src": "db_fallback", "dst": "p99_latency_800ms", "type": "causes", "confidence": 0.9,
-     "evidence": "Direct database reads are ~10x slower than the cache layer here."}
+     "evidence": "Slow request rate amplifies the effect of a short TTL — a faster rate would have absorbed expiries."},
+    {"src": "cache_miss_storm", "dst": "database_fallback", "type": "causes", "confidence": 1.0,
+     "evidence": "Cache miss => the read goes to the database by definition of the cache-aside pattern."},
+    {"src": "database_fallback", "dst": "p99_latency_800ms", "type": "causes", "confidence": 0.9,
+     "evidence": "Direct database reads are ~10x slower than the cache layer here — explains the observed latency rise."}
   ]
 }
 ```
@@ -406,13 +247,7 @@ Extraction:
 Sample queries afterwards:
 
 ```bash
-./brain.py causes p99_latency_800ms      # walks back through db_fallback → cache_miss_storm → ttl_5_seconds
-./brain.py effects ttl_5_seconds         # walks forward to the latency outcome
-./brain.py paths ttl_5_seconds p99_latency_800ms
+brain causes p99_latency_800ms   # walks back through database_fallback → cache_miss_storm → ttl_5_seconds
+brain effects ttl_5_seconds      # walks forward to the latency outcome
+brain paths ttl_5_seconds p99_latency_800ms
 ```
-
-## Reference examples
-
-The repository ships `examples/sample.json` describing the causal anatomy of
-how open-source projects die (18 nodes, 26 relations). Read it before
-extracting your first document — it shows the granularity and tone expected.

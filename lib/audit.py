@@ -12,6 +12,12 @@ from lib.db import rows
 RELATED_TO_THRESHOLD = 0.05
 NO_DESCRIPTION_THRESHOLD = 0.20
 ORPHAN_THRESHOLD = 0.10
+CAUSAL_RATIO_MIN = 0.15
+STRUCTURAL_DOMINANCE_MAX = 0.70
+TRADEOFF_RATIO_MIN = 0.02
+
+CAUSAL_REL_TYPES = ("causes", "prevents", "enables", "contradicts")
+STRUCTURAL_REL_TYPES = ("part_of", "requires")
 
 
 @dataclass
@@ -33,6 +39,7 @@ def run_audit(conn: kuzu.Connection) -> AuditReport:
     report = AuditReport()
     _volumes(conn, report)
     _related_to_ratio(conn, report)
+    _causal_balance(conn, report)
     _description_coverage(conn, report)
     _orphan_nodes(conn, report)
     _single_source_rels(conn, report)
@@ -41,6 +48,44 @@ def run_audit(conn: kuzu.Connection) -> AuditReport:
     _doc_contributions(conn, report)
     _array_alignment(conn, report)
     return report
+
+
+def _causal_balance(conn, report):
+    """Compute causal_ratio, structural_dominance and tradeoff_ratio.
+
+    Three signals a graph is too tree-like or too judgement-free:
+    - causal_ratio = (causes+prevents+enables+contradicts) / total_rels
+    - structural_dominance = (part_of+requires) / total_rels
+    - tradeoff_ratio = contradicts / total_rels (rejected alternatives)
+    """
+    total = report.metrics["total_rels"]
+    if not total:
+        report.metrics["causal_ratio"] = 0.0
+        report.metrics["structural_dominance"] = 0.0
+        report.metrics["tradeoff_ratio"] = 0.0
+        return
+    counts = {row["type"]: row["c"] for row in report.metrics["rels_by_type"]}
+    causal = sum(counts.get(t, 0) for t in CAUSAL_REL_TYPES)
+    structural = sum(counts.get(t, 0) for t in STRUCTURAL_REL_TYPES)
+    contradicts = counts.get("contradicts", 0)
+    report.metrics["causal_ratio"] = causal / total
+    report.metrics["structural_dominance"] = structural / total
+    report.metrics["tradeoff_ratio"] = contradicts / total
+    if total >= 10 and (causal / total) < CAUSAL_RATIO_MIN:
+        report.warnings.append(
+            f"causal ratio {causal/total:.1%} below {CAUSAL_RATIO_MIN:.0%} threshold — "
+            f"graph is too structural; add causes/prevents/enables/contradicts edges"
+        )
+    if total >= 10 and (structural / total) > STRUCTURAL_DOMINANCE_MAX:
+        report.warnings.append(
+            f"structural dominance {structural/total:.1%} above {STRUCTURAL_DOMINANCE_MAX:.0%} threshold — "
+            f"part_of+requires drowns the causal signal"
+        )
+    if total >= 20 and (contradicts / total) < TRADEOFF_RATIO_MIN:
+        report.warnings.append(
+            f"tradeoff ratio {contradicts/total:.1%} below {TRADEOFF_RATIO_MIN:.0%} — "
+            f"no rejected alternatives captured; every project has design tradeoffs"
+        )
 
 
 def _volumes(conn, report):

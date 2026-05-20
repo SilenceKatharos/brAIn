@@ -8,6 +8,7 @@ the new content. See VISION.md sections 4.4 and 5.1 for design rationale.
 from __future__ import annotations
 
 import datetime as dt
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from lib.db import rows
 from lib.logs import log_extension_request, log_potential_duplicate
 from lib.slugify import slugify
 from lib.validate import (
+    LintIssue,
     NodePayload,
     RelPayload,
     ValidationResult,
@@ -45,6 +47,19 @@ class IngestReport:
     rewritten_ids: list[dict] = field(default_factory=list)
     potential_duplicates: list[dict] = field(default_factory=list)
     skipped_rels: list[dict] = field(default_factory=list)
+    lint_issues: list[LintIssue] = field(default_factory=list)
+    project_tag_injected: str | None = None
+
+    @property
+    def has_issues(self) -> bool:
+        """True if anything went wrong silently — the CLI must surface this."""
+        return bool(
+            self.rejected_nodes
+            or self.rejected_rels
+            or self.skipped_rels
+            or self.rewritten_ids
+            or self.lint_issues
+        )
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -66,10 +81,19 @@ class IngestReport:
 def ingest_payload(
     conn: kuzu.Connection, payload: dict[str, Any], log_root: Path | str
 ) -> IngestReport:
-    """Run the four-phase ingest: validate, purge, upsert nodes, upsert rels."""
+    """Run the four-phase ingest: validate, purge, upsert nodes, upsert rels.
+
+    Auto-injects ``project:<name>`` from the doc_id (handled by validate),
+    surfaces lint issues and skipped rels in the report so the CLI can
+    fail loudly.
+    """
+    from lib.validate import derive_project_tag
+
     log_root = Path(log_root)
     doc_id, validation = validate_payload(payload)
     report = IngestReport(doc_id=doc_id)
+    report.lint_issues = list(validation.lint_issues)
+    report.project_tag_injected = derive_project_tag(doc_id)
     _record_validation_artifacts(report, validation, doc_id, log_root)
     _purge_doc_contributions(conn, doc_id, report)
     _upsert_nodes(conn, validation.nodes, doc_id, report, log_root)
@@ -278,6 +302,43 @@ def _log_substring_duplicates(
     )
 
 
+def _assemble_rel_arrays(
+    doc_id: str,
+    r: RelPayload,
+    current_srcs: list[str] | None = None,
+    current_evs: list[str] | None = None,
+    current_fcts: list[str] | None = None,
+) -> tuple[list[str], list[str], list[str]]:
+    """Build aligned (sources, evidences, factors) arrays.
+
+    Invariant: ``len(sources) == len(evidences) == len(factors)``.
+    Each index i represents one CONTRIBUTING SOURCE. The doc_id ingested
+    here contributes (r.evidence, r.factor). Extra entries in r.sources
+    (project tags, cross-references) contribute empty evidence/factor —
+    they are metadata, not provenance with a sentence behind them.
+    """
+    new_srcs = list(current_srcs or [])
+    new_evs = list(current_evs or [])
+    new_fcts = list(current_fcts or [])
+    # Add or refresh the contribution from this doc_id.
+    if doc_id in new_srcs:
+        idx = new_srcs.index(doc_id)
+        new_evs[idx] = r.evidence
+        new_fcts[idx] = r.factor
+    else:
+        new_srcs.append(doc_id)
+        new_evs.append(r.evidence)
+        new_fcts.append(r.factor)
+    # Add extra sources (project tags etc.) without evidence/factor.
+    for extra in r.sources:
+        if extra == doc_id or extra in new_srcs:
+            continue
+        new_srcs.append(extra)
+        new_evs.append("")
+        new_fcts.append("")
+    return new_srcs, new_evs, new_fcts
+
+
 def _upsert_rels(
     conn: kuzu.Connection, rels: list[RelPayload], doc_id: str, report: IngestReport
 ) -> None:
@@ -285,6 +346,10 @@ def _upsert_rels(
         src_id = slugify(r.src) if not _node_exists(conn, r.src) else r.src
         dst_id = slugify(r.dst) if not _node_exists(conn, r.dst) else r.dst
         if not _node_exists(conn, src_id) or not _node_exists(conn, dst_id):
+            print(
+                f"  X skipped rel (missing endpoint): {r.src} --[{r.type}]--> {r.dst}",
+                file=sys.stderr,
+            )
             report.skipped_rels.append(
                 {"reason": "missing_endpoint", "src": r.src, "dst": r.dst, "type": r.type}
             )
@@ -302,9 +367,12 @@ def _upsert_rels(
         if existing:
             current = existing[0]
             new_conf = max(float(current["c"]), float(r.confidence))
-            new_sources = list(dict.fromkeys(list(current["srcs"]) + [doc_id] + list(r.sources)))
-            new_evidences = list(current["evs"]) + [r.evidence]
-            new_factors = list(current["fcts"]) + [r.factor]
+            new_srcs, new_evs, new_fcts = _assemble_rel_arrays(
+                doc_id, r,
+                current_srcs=list(current["srcs"]),
+                current_evs=list(current["evs"]),
+                current_fcts=list(current["fcts"]),
+            )
             conn.execute(
                 """
                 MATCH (a:Node {id: $src})-[e:Rel {type: $rtype}]->(b:Node {id: $dst})
@@ -316,14 +384,15 @@ def _upsert_rels(
                     "dst": dst_id,
                     "rtype": r.type,
                     "c": new_conf,
-                    "srcs": new_sources,
-                    "evs": new_evidences,
-                    "fcts": new_factors,
+                    "srcs": new_srcs,
+                    "evs": new_evs,
+                    "fcts": new_fcts,
                     "now": now,
                 },
             )
             report.rels_updated += 1
         else:
+            new_srcs, new_evs, new_fcts = _assemble_rel_arrays(doc_id, r)
             conn.execute(
                 """
                 MATCH (a:Node {id: $src}), (b:Node {id: $dst})
@@ -338,9 +407,9 @@ def _upsert_rels(
                     "dst": dst_id,
                     "rtype": r.type,
                     "c": r.confidence,
-                    "evs": [r.evidence],
-                    "fcts": [r.factor],
-                    "srcs": list(dict.fromkeys([doc_id, *r.sources])),
+                    "evs": new_evs,
+                    "fcts": new_fcts,
+                    "srcs": new_srcs,
                     "now": now,
                 },
             )

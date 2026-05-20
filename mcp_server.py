@@ -23,6 +23,8 @@ from mcp.server import Server
 
 from lib.db import connect, init_schema
 from lib.ingest import ingest_payload
+from lib import audit as audit_mod
+from lib import check as check_mod
 from lib import query as q
 
 DB_PATH = PROJECT_ROOT / "graph" / "kuzu_db"
@@ -219,8 +221,14 @@ TOOLS = [
         name="brain_ingest",
         description=(
             "Ingest a JSON payload file into the graph. "
-            "The file must follow the brAIn ingestion schema "
-            "(doc_id, nodes[], rels[]). Re-ingesting the same doc_id is safe and idempotent."
+            "RESERVED USAGE: only the background sync agent (brain_sync_agent.sh) "
+            "and explicit user-invoked /ingest commands should call this. Working "
+            "sessions must NOT call brain_ingest spontaneously — graph maintenance "
+            "is the sync agent's job and runs automatically at every Stop. If unsure, "
+            "default to NOT calling. "
+            "STRICT: runs check() first and refuses payloads with errors (missing "
+            "endpoints, zero causal edges, rejected nodes/rels). No --force here — "
+            "fix the payload and retry. Re-ingesting the same doc_id is idempotent."
         ),
         inputSchema={
             "type": "object",
@@ -229,6 +237,31 @@ TOOLS = [
             },
             "required": ["path"],
         },
+    ),
+    types.Tool(
+        name="brain_check",
+        description=(
+            "Dry-run validation of a payload before ingest. Returns the list of errors and warnings "
+            "(missing endpoints, slug pitfalls, paragraph descriptions, weak evidence, missing causal edges, "
+            "potential duplicates against the existing graph). Use this before calling brain_ingest to know "
+            "what to fix."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path to the JSON payload file"},
+            },
+            "required": ["path"],
+        },
+    ),
+    types.Tool(
+        name="brain_audit",
+        description=(
+            "Health audit of the graph: volumes, related_to ratio, causal/structural balance, "
+            "orphan ratio, average confidence by rel type, contributions per doc. Returns warnings "
+            "and errors so you can see if recent ingests degraded the graph."
+        ),
+        inputSchema={"type": "object", "properties": {}},
     ),
 ]
 
@@ -289,15 +322,131 @@ def _dispatch(name: str, args: dict) -> str:
         payload = json.loads(path.read_text(encoding="utf-8"))
         conn = _conn(read_only=False)
         init_schema(conn)
+        pre = check_mod.check_payload(payload, conn)
+        if pre.has_errors:
+            return (
+                f"INGEST REFUSED (doc_id={pre.doc_id}): the payload has error-level issues. "
+                f"Fix them in the JSON file and retry. The MCP path is strict by design — there is no --force.\n\n"
+                + _fmt_check(pre)
+            )
         report = ingest_payload(conn, payload, log_root=LOG_ROOT)
-        return (
-            f"doc_id: {report.doc_id}\n"
-            f"  nodes: {report.nodes_created} created, {report.nodes_updated} updated\n"
-            f"  rels : {report.rels_created} created, {report.rels_updated} updated\n"
-            f"  skipped rels: {len(report.skipped_rels)}"
+        lines = [
+            f"doc_id: {report.doc_id}",
+            f"  project tag    : {report.project_tag_injected or '-'}",
+            f"  nodes: {report.nodes_created} created, {report.nodes_updated} updated",
+            f"  rels : {report.rels_created} created, {report.rels_updated} updated",
+        ]
+        if report.skipped_rels:
+            lines.append(f"  X skipped rels: {len(report.skipped_rels)} — DATA LOSS")
+        if report.lint_issues:
+            lines.append(f"  ! lint warnings: {len(report.lint_issues)}")
+        if pre.has_warnings:
+            lines.append("")
+            lines.append(_fmt_check(pre))
+        # post-ingest mini-audit
+        audit_report = audit_mod.run_audit(conn)
+        m = audit_report.metrics
+        lines.append("")
+        lines.append("# Post-ingest health")
+        lines.append(f"  total: {m['total_nodes']} nodes, {m['total_rels']} rels")
+        lines.append(
+            f"  causal {m.get('causal_ratio', 0):.0%} | "
+            f"structural {m.get('structural_dominance', 0):.0%} | "
+            f"tradeoff {m.get('tradeoff_ratio', 0):.0%} | "
+            f"orphans {m.get('orphan_ratio', 0):.0%}"
         )
+        for w in audit_report.warnings:
+            lines.append(f"  ! {w}")
+        return "\n".join(lines)
+
+    if name == "brain_check":
+        path = Path(args["path"])
+        if not path.exists():
+            return f"File not found: {path}"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        conn = _conn()
+        pre = check_mod.check_payload(payload, conn)
+        return _fmt_check(pre)
+
+    if name == "brain_audit":
+        conn = _conn()
+        report = audit_mod.run_audit(conn)
+        return _fmt_audit(report)
 
     return f"Unknown tool: {name}"
+
+
+def _fmt_check(rep: check_mod.CheckReport) -> str:
+    lines = [f"doc_id: {rep.doc_id}"]
+    lines.append(f"  payload: {rep.node_count} node(s), {rep.rel_count} rel(s)")
+    if rep.project_tag:
+        lines.append(f"  project tag (would be auto-injected): {rep.project_tag}")
+    if rep.rejected_nodes:
+        lines.append(f"  X {len(rep.rejected_nodes)} node(s) rejected")
+        for rn in rep.rejected_nodes[:5]:
+            lines.append(f"    - {rn.get('reason')}: {rn.get('raw', {}).get('label', '?')}")
+    if rep.rejected_rels:
+        lines.append(f"  X {len(rep.rejected_rels)} rel(s) rejected")
+        for rr in rep.rejected_rels[:5]:
+            lines.append(f"    - {rr.get('reason')}: {rr.get('raw', {}).get('src')} -> {rr.get('raw', {}).get('dst')}")
+    if rep.missing_endpoints:
+        lines.append(f"  X {len(rep.missing_endpoints)} rel(s) reference missing nodes (slug pitfall?)")
+        for me in rep.missing_endpoints[:5]:
+            missing = "src" if me["src_missing"] else ""
+            if me["dst_missing"]:
+                missing = (missing + "+dst") if missing else "dst"
+            lines.append(f"    - {me['src']} --[{me['type']}]--> {me['dst']}  (missing: {missing})")
+    if not rep.causal_check_passed:
+        lines.append(f"  X causal check failed: {rep.causal_check_reason}")
+    if rep.rewritten_ids:
+        lines.append(f"  ! {len(rep.rewritten_ids)} id(s) rewritten by slugify:")
+        for ri in rep.rewritten_ids[:5]:
+            lines.append(f"    - '{ri['proposed']}' -> '{ri['canonical']}' (label: {ri['label']})")
+    if rep.lint_issues:
+        lines.append(f"  ! {len(rep.lint_issues)} lint warning(s)")
+        for li in rep.lint_issues[:8]:
+            lines.append(f"    - [{li.kind}] {li.target}: {li.detail}")
+    if rep.potential_duplicates:
+        lines.append(f"  ! {len(rep.potential_duplicates)} potential duplicate(s) against existing graph")
+        for pd in rep.potential_duplicates[:5]:
+            cand_str = ", ".join(c["id"] for c in pd["candidates"][:3])
+            lines.append(f"    - new '{pd['new_id']}' ('{pd['new_label']}') ~ existing: {cand_str}")
+    if rep.has_errors:
+        lines.append("\nresult: FAIL — fix errors before ingest")
+    elif rep.has_warnings:
+        lines.append("\nresult: PASS with warnings (ingest will proceed)")
+    else:
+        lines.append("\nresult: PASS — payload is clean")
+    return "\n".join(lines)
+
+
+def _fmt_audit(rep: "audit_mod.AuditReport") -> str:
+    m = rep.metrics
+    lines = [
+        "# Volumes",
+        f"  total nodes : {m['total_nodes']}",
+        f"  total rels  : {m['total_rels']}",
+        "",
+        "# Health",
+        f"  related_to ratio    : {m.get('related_to_ratio', 0):.1%}",
+        f"  no-description ratio: {m.get('no_description_ratio', 0):.1%}",
+        f"  orphan ratio        : {m.get('orphan_ratio', 0):.1%}",
+        f"  single-source rels  : {m.get('single_source_rels', 0)}",
+        f"  causal ratio        : {m.get('causal_ratio', 0):.1%}",
+        f"  structural dominance: {m.get('structural_dominance', 0):.1%}",
+        f"  tradeoff ratio      : {m.get('tradeoff_ratio', 0):.1%}",
+    ]
+    if rep.warnings:
+        lines.append("")
+        lines.append("# Warnings")
+        for w in rep.warnings:
+            lines.append(f"  ! {w}")
+    if rep.errors:
+        lines.append("")
+        lines.append("# Errors")
+        for e in rep.errors:
+            lines.append(f"  X {e}")
+    return "\n".join(lines)
 
 
 async def main() -> None:
