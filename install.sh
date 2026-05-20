@@ -40,7 +40,7 @@ echo "✓ Virtual environment"
 
 # ── 3. Python dependencies ────────────────────────────────────────────────────
 echo "Installing Python dependencies..."
-"$PIP_BIN" install --quiet kuzu click fastapi "uvicorn[standard]"
+"$PIP_BIN" install --quiet kuzu click fastapi "uvicorn[standard]" mcp
 echo "✓ Python dependencies"
 
 # ── 4. Graph schema + restore ─────────────────────────────────────────────────
@@ -48,7 +48,11 @@ if [ "$SKIP_GRAPH" = false ]; then
     echo "Initializing graph schema..."
     "$PYTHON_BIN" "${BRAIN_DIR}/brain.py" init
 
-    PAYLOADS=$(find "${BRAIN_DIR}/projects" -name "*.json" | sort)
+    # Ingest examples/ (bootstrap content for new users) AND projects/
+    # (public payloads — by default the brain self-doc + ripgrep example).
+    PAYLOADS=$( { find "${BRAIN_DIR}/examples" -name "*.json" 2>/dev/null
+                  find "${BRAIN_DIR}/projects" -name "*.json" 2>/dev/null
+                } | sort -u )
     COUNT=$(echo "$PAYLOADS" | grep -c . 2>/dev/null || echo 0)
     if [ "$COUNT" -gt 0 ]; then
         echo "Ingesting $COUNT knowledge payload(s) (pass 1/2)..."
@@ -69,12 +73,23 @@ fi
 LOCAL_BIN="${HOME}/.local/bin"
 mkdir -p "$LOCAL_BIN"
 WRAPPER="${LOCAL_BIN}/brain"
-cat > "$WRAPPER" << EOF
+
+# Preserve any existing shim that points to a different install — overwriting
+# silently breaks a working setup when a user clones somewhere else to test.
+if [ -f "$WRAPPER" ] && ! grep -q "${BRAIN_DIR}" "$WRAPPER" 2>/dev/null; then
+    EXISTING_TARGET=$(grep -oE '"/[^"]+brain\.py"' "$WRAPPER" | head -1 | tr -d '"')
+    echo "  NOTE: ${WRAPPER} already exists pointing to ${EXISTING_TARGET}."
+    echo "        Not overwriting. To switch the global 'brain' command to this install, run:"
+    echo "          printf '#!/usr/bin/env bash\\nexec \"%s\" \"%s\" \"\$@\"\\n' '${PYTHON_BIN}' '${BRAIN_DIR}/brain.py' > '${WRAPPER}'"
+    echo "          chmod +x '${WRAPPER}'"
+else
+    cat > "$WRAPPER" << EOF
 #!/usr/bin/env bash
 exec "${PYTHON_BIN}" "${BRAIN_DIR}/brain.py" "\$@"
 EOF
-chmod +x "$WRAPPER"
-echo "✓ Global 'brain' command installed at $WRAPPER"
+    chmod +x "$WRAPPER"
+    echo "✓ Global 'brain' command installed at $WRAPPER"
+fi
 
 if ! echo "$PATH" | grep -q "${LOCAL_BIN}"; then
     echo "  NOTE: Add to your shell profile: export PATH=\"\$HOME/.local/bin:\$PATH\""
@@ -111,6 +126,7 @@ echo "   {"
 echo "     \"hooks\": {"
 echo "       \"SessionStart\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"${BRAIN_DIR}/brain_session_start.sh\", \"timeout\": 5}]}],"
 echo "       \"PostToolUse\": [{\"matcher\": \"Write|Edit\", \"hooks\": [{\"type\": \"command\", \"command\": \"${BRAIN_DIR}/brain_hook.sh\", \"timeout\": 5}]}],"
+echo "       \"UserPromptSubmit\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"${BRAIN_DIR}/brain_user_prompt.sh\", \"timeout\": 3}]}],"
 echo "       \"Stop\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"${PYTHON_BIN} ${BRAIN_DIR}/brain_stop_check.py\", \"timeout\": 15}]}]"
 echo "     }"
 echo "   }"
@@ -121,4 +137,5 @@ echo "================================"
 echo ""
 echo "Quick test:"
 echo "  brain stats"
-echo "  brain effects bus_factor_of_one"
+echo "  brain causes project_death     # walks the OSS-mortality sample"
+echo "  brain show brain_sync_agent_script  # see brAIn's own self-doc"
