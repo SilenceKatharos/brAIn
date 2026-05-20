@@ -59,6 +59,13 @@ brain causes project_death
 #   bus_factor_of_one (claim) --[causes c=0.80]--> no_release_in_year ...
 ```
 
+Prefer a graphical explorer? Launch the bundled UI (backend + frontend
+in one command):
+
+```bash
+./ui/start.sh                  # → http://localhost:5173
+```
+
 ## Anatomy of a node
 
 Every node in the graph carries the same five things, whether you query
